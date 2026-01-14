@@ -1,0 +1,10 @@
+{
+  "name": "magi-core",
+  "version": "2.1.0",
+  "type": "module",
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "@google-cloud/bigquery": "^7.3.0",
+    "uuid": "^9.0.0"
+  }
+}
