@@ -7,7 +7,7 @@ const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
-const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral'; // デフォルトはmistral
+const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral';
 
 // BigQuery初期化
 const bigquery = new BigQuery({ projectId: 'screen-share-459802' });
@@ -15,17 +15,15 @@ const dataset = bigquery.dataset('magi_core');
 let sessionId = null;
 let startingEquity = null;
 
-// **強化版: 同期書き込み + リトライロジック**
+// 強化版: 同期書き込み + リトライロジック
 async function safeInsert(tableName, rows) {
   const maxRetries = 3;
   let attempt = 0;
-
   while (attempt < maxRetries) {
     try {
       console.log(`[BQ] Attempt ${attempt + 1}: Inserting into ${tableName}`);
       const table = dataset.table(tableName);
       const [response] = await table.insert(rows);
-
       if (response.insertErrors) {
         console.error(`[BQ ERROR] Insert errors:`, response.insertErrors);
         attempt++;
@@ -40,7 +38,6 @@ async function safeInsert(tableName, rows) {
       await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
     }
   }
-
   console.error(`[BQ FAILURE] Failed to insert into ${tableName} after ${maxRetries} attempts`);
   return false;
 }
@@ -52,7 +49,7 @@ const alpacaHeaders = {
   'Content-Type': 'application/json',
 };
 
-// **ツール定義（変更なし）**
+// ツール定義
 const tools = [
   {
     type: "function",
@@ -62,10 +59,7 @@ const tools = [
       parameters: {
         type: "object",
         properties: {
-          symbol: {
-            type: "string",
-            description: "Stock symbol (e.g., AAPL)"
-          }
+          symbol: { type: "string", description: "Stock symbol (e.g., AAPL)" }
         },
         required: ["symbol"]
       }
@@ -76,10 +70,7 @@ const tools = [
     function: {
       name: "get_account",
       description: "Get account information including buying power and portfolio value",
-      parameters: {
-        type: "object",
-        properties: {}
-      }
+      parameters: { type: "object", properties: {} }
     }
   },
   {
@@ -87,10 +78,7 @@ const tools = [
     function: {
       name: "get_positions",
       description: "Get current positions",
-      parameters: {
-        type: "object",
-        properties: {}
-      }
+      parameters: { type: "object", properties: {} }
     }
   },
   {
@@ -117,16 +105,14 @@ const tools = [
       description: "Record your thinking process",
       parameters: {
         type: "object",
-        properties: {
-          content: { type: "string" }
-        },
+        properties: { content: { type: "string" } },
         required: ["content"]
       }
     }
   }
 ];
 
-// ツール実行関数（強化版）
+// ツール実行関数
 async function executeTool(toolName, params) {
   try {
     switch (toolName) {
@@ -136,7 +122,7 @@ async function executeTool(toolName, params) {
           { headers: alpacaHeaders }
         );
         const priceData = await priceResponse.json();
-        return { price: priceData.quote?.ap || 0 };
+        return { symbol: params.symbol, price: priceData.quote?.ap || 0 };
 
       case "get_account":
         const accountResponse = await fetch(
@@ -168,9 +154,7 @@ async function executeTool(toolName, params) {
           }
         );
         const orderResult = await orderResponse.json();
-
-        // 取引記録
-        const tradeLogged = await safeInsert('trades', [{
+        await safeInsert('trades', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
           order_id: orderResult.id || null,
@@ -180,25 +164,15 @@ async function executeTool(toolName, params) {
           price: orderResult.filled_avg_price || null,
           reason: params.reason
         }]);
-
-        if (!tradeLogged) {
-          console.error('[CRITICAL] Failed to log trade to BigQuery');
-        }
-
         return orderResult;
 
       case "log_thought":
         console.log(`[THOUGHT] ${params.content}`);
-        const thoughtLogged = await safeInsert('thoughts', [{
+        await safeInsert('thoughts', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
           content: params.content
         }]);
-
-        if (!thoughtLogged) {
-          console.error('[CRITICAL] Failed to log thought to BigQuery');
-        }
-
         return { status: "logged" };
 
       default:
@@ -210,7 +184,7 @@ async function executeTool(toolName, params) {
   }
 }
 
-// **Gemini API用のツール定義（Function Calling対応）**
+// Gemini API用ツール定義（camelCase）
 const geminiTools = [
   {
     functionDeclarations: tools.map(tool => ({
@@ -221,7 +195,7 @@ const geminiTools = [
   }
 ];
 
-// **LLM API呼び出し関数（マルチプロバイダ対応）**
+// LLM API呼び出し関数
 async function callLLM(messages) {
   const startTime = Date.now();
   let response;
@@ -231,13 +205,51 @@ async function callLLM(messages) {
     if (LLM_PROVIDER === 'google') {
       provider = 'google';
       model = 'gemini-2.0-flash';
-      const geminiMessages = messages.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content || '' }],
-      }));
+
+      // システムプロンプトを抽出
+      let systemInstruction = null;
+      const geminiMessages = [];
+
+      for (const msg of messages) {
+        if (msg.role === 'system') {
+          systemInstruction = { parts: [{ text: msg.content }] };
+        } else if (msg.role === 'tool') {
+          // ツール結果をfunctionResponse形式に変換
+          geminiMessages.push({
+            role: 'user',
+            parts: [{
+              functionResponse: {
+                name: msg.tool_name, // ツール名を使用
+                response: JSON.parse(msg.content)
+              }
+            }]
+          });
+        } else if (msg.role === 'assistant' && msg.tool_calls) {
+          // アシスタントのツール呼び出しをfunctionCall形式に変換
+          const parts = [];
+          if (msg.content) {
+            parts.push({ text: msg.content });
+          }
+          for (const toolCall of msg.tool_calls) {
+            parts.push({
+              functionCall: {
+                name: toolCall.function.name,
+                args: JSON.parse(toolCall.function.arguments),
+              }
+            });
+          }
+          geminiMessages.push({ role: 'model', parts });
+        } else {
+          geminiMessages.push({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: msg.content || '' }]
+          });
+        }
+      }
 
       const geminiBody = {
         contents: geminiMessages,
+        ...(systemInstruction && { system_instruction: systemInstruction }),
         tools: geminiTools,
         tool_config: { function_calling_config: { mode: 'auto' } },
       };
@@ -259,9 +271,8 @@ async function callLLM(messages) {
 
       const geminiResponse = await response.json();
       const responseTimeMs = Date.now() - startTime;
-
-      // GeminiレスポンスをOpenAI形式に変換
       const candidate = geminiResponse.candidates?.[0];
+
       if (!candidate) {
         throw new Error("No candidate in Gemini response");
       }
@@ -279,18 +290,13 @@ async function callLLM(messages) {
         }));
 
       const result = {
-        choices: [
-          {
-            message: {
-              role: "assistant",
-              content: content.parts
-                .filter(part => part.text)
-                .map(part => part.text)
-                .join("\n"),
-              tool_calls: functionCalls.length > 0 ? functionCalls : undefined,
-            },
+        choices: [{
+          message: {
+            role: "assistant",
+            content: content.parts.filter(part => part.text).map(part => part.text).join("\n"),
+            tool_calls: functionCalls.length > 0 ? functionCalls : undefined,
           },
-        ],
+        }],
         usage: {
           prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
           completion_tokens: geminiResponse.usageMetadata?.candidatesTokenCount || 0,
@@ -299,14 +305,12 @@ async function callLLM(messages) {
 
       inputTokens = result.usage.prompt_tokens;
       outputTokens = result.usage.completion_tokens;
-      costUsd = (inputTokens * 0.0 + outputTokens * 0.0) / 1000000; // Geminiのコスト計算（無料モデルのため0）
+      costUsd = (inputTokens * 0.075 + outputTokens * 0.3) / 1000000;
 
-      // llm_metrics記録
       await safeInsert('llm_metrics', [{
         session_id: sessionId,
         timestamp: new Date().toISOString(),
-        provider,
-        model,
+        provider, model,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         response_time_ms: responseTimeMs,
@@ -315,7 +319,7 @@ async function callLLM(messages) {
 
       return result;
     } else {
-      // Mistral（既存ロジック）
+      // Mistral
       provider = 'mistral';
       model = 'mistral-small-latest';
       response = await fetch("https://api.mistral.ai/v1/chat/completions", {
@@ -324,12 +328,7 @@ async function callLLM(messages) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${MISTRAL_API_KEY}`
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          tools,
-          tool_choice: "auto"
-        })
+        body: JSON.stringify({ model, messages, tools, tool_choice: "auto" })
       });
 
       if (!response.ok) {
@@ -340,17 +339,14 @@ async function callLLM(messages) {
 
       const mistralResponse = await response.json();
       const responseTimeMs = Date.now() - startTime;
-
       inputTokens = mistralResponse.usage?.prompt_tokens || 0;
       outputTokens = mistralResponse.usage?.completion_tokens || 0;
-      costUsd = (inputTokens * 0.1 + outputTokens * 0.3) / 1000000; // Mistralのコスト計算
+      costUsd = (inputTokens * 0.1 + outputTokens * 0.3) / 1000000;
 
-      // llm_metrics記録
       await safeInsert('llm_metrics', [{
         session_id: sessionId,
         timestamp: new Date().toISOString(),
-        provider,
-        model,
+        provider, model,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         response_time_ms: responseTimeMs,
@@ -360,17 +356,16 @@ async function callLLM(messages) {
       return mistralResponse;
     }
   } catch (error) {
-    console.error(`[${provider.toUpperCase()} ERROR]`, error.message);
+    console.error(`[${provider?.toUpperCase() || 'LLM'} ERROR]`, error.message);
     throw error;
   }
 }
 
-// セッション開始（強化版）
+// セッション開始
 async function startSession() {
   sessionId = uuidv4();
   const account = await executeTool("get_account", {});
-
-  const sessionLogged = await safeInsert('sessions', [{
+  await safeInsert('sessions', [{
     session_id: sessionId,
     started_at: new Date().toISOString(),
     llm_provider: LLM_PROVIDER,
@@ -378,35 +373,26 @@ async function startSession() {
     starting_equity: parseFloat(account.equity),
     total_trades: 0
   }]);
-
-  if (!sessionLogged) {
-    console.error('[CRITICAL] Failed to log session start to BigQuery');
-  }
-
   startingEquity = parseFloat(account.equity);
   console.log(`[SESSION] Started: ${sessionId}`);
   console.log(`[SESSION] Starting equity: $${startingEquity}`);
   return sessionId;
 }
 
-// セッション終了（強化版）
-async function endSession() {
+// セッション終了
+async function endSession(error = null) {
   try {
     const account = await executeTool("get_account", {});
     const endingEquity = parseFloat(account.equity);
     const pnl = endingEquity - startingEquity;
     const pnlPercent = (pnl / startingEquity) * 100;
-
-    // セッション更新
-    const sessionUpdated = await safeInsert('sessions', [{
+    await safeInsert('sessions', [{
       session_id: sessionId,
       ended_at: new Date().toISOString(),
       ending_equity: endingEquity,
-      pnl,
-      pnl_percent: pnlPercent
+      pnl, pnl_percent: pnlPercent,
     }]);
-
-    const snapshotLogged = await safeInsert('portfolio_snapshots', [{
+    await safeInsert('portfolio_snapshots', [{
       timestamp: new Date().toISOString(),
       equity: endingEquity,
       cash: parseFloat(account.cash),
@@ -414,95 +400,65 @@ async function endSession() {
       daily_pnl: pnl,
       total_pnl_percent: pnlPercent
     }]);
-
-    if (!sessionUpdated || !snapshotLogged) {
-      console.error('[CRITICAL] Failed to log session end or portfolio snapshot to BigQuery');
-    }
-
     console.log(`[SESSION] Ended: ${sessionId}`);
     console.log(`[SESSION] Ending equity: $${endingEquity}`);
     console.log(`[SESSION] PnL: $${pnl.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
-  } catch (error) {
-    console.error('[SESSION ERROR] Failed to end session:', error.message);
+  } catch (err) {
+    console.error('[SESSION ERROR]', err.message);
   }
 }
 
-// **メインループ（変更なし）**
+// メインループ
 async function main() {
-  console.log(`=== MAGI Core v3.0 (${LLM_PROVIDER.toUpperCase()}) ===\n`);
-
+  console.log(`=== MAGI Core v3.2 (${LLM_PROVIDER.toUpperCase()}) ===\n`);
   let tradeCount = 0;
-  let consecutiveNoTradeTurns = 0;
 
   try {
     await startSession();
 
-    const systemPrompt = `
-    あなたは自律的なトレーダーです。
+    const systemPrompt = `あなたは自律的なトレーダーです。
 
-    【ミッション】
-    1年間で資産を最大限増やすこと。
-    目標リターン、戦略、銘柄選定、すべてあなたが決めてください。
+【ミッション】1年間で資産を最大限増やすこと。
 
-    【環境】
-    - Alpaca Paper Trading口座（米国株）
-    - 初期資金: $100,000
-    - 期間: 2026年1月〜12月（1年間）
+【環境】
+- Alpaca Paper Trading口座（米国株）
+- 初期資金: $100,000
 
-    【利用可能なツール】
-    - get_price: 銘柄の現在価格を取得
-    - get_positions: 保有ポジションを確認
-    - get_account: 口座残高・購買力を確認
-    - place_order: 売買注文を実行
-    - log_thought: 考えたことを記録
+【利用可能なツール】
+- get_price: 銘柄の現在価格を取得
+- get_positions: 保有ポジションを確認
+- get_account: 口座残高・購買力を確認
+- place_order: 売買注文を実行
+- log_thought: 考えたことを記録
 
-    【必須行動ルール】
-    1. 毎セッション、最低1回は取引（place_order）を実行すること
-    2. 「タイミングではない」「様子を見る」は禁止。今ある情報で判断すること
-    3. 分析だけで終わらず、必ず行動に移すこと
-    4. 同じ思考を2回以上繰り返さないこと
-    5. ポートフォリオが空なら、必ず何か買うこと
-    【監視銘柄（テック株）】
-    AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORCL, NFLX, UBER, SHOP
-    この中から選んで取引してください。
-    【制約】
-    - 1銘柄への投資は総資金の20%まで
-    - 1日の取引回数は10回まで
+【必須ルール】
+1. 最初にget_accountで残高確認
+2. get_priceで価格確認
+3. place_orderで取引実行（必須）
+4. log_thoughtは1回だけ
 
-    【手順】
-    1. log_thoughtで目標を設定（1回だけ）
-    2. get_accountで残高確認
-    3. get_priceで価格確認
-    4. place_orderで取引実行
-    5. 完了
+【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD
 
-    【重要】
-    - 取引を実行しない場合、システムが強制的に取引を実行します
-    - 3ターン連続で取引がない場合、自動的に安全な取引が実行されます
-    - 初期資金の10%を超える取引は、十分な分析が必要です`;
+【重要】必ず取引を実行してください。分析だけで終わらないこと。`;
 
     let messages = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: "トレードを開始してください。" }
+      { role: "user", content: "取引を開始してください。まずget_accountで残高を確認し、次にget_priceで株価を確認し、最後にplace_orderで取引を実行してください。" }
     ];
 
-    const maxTurns = 20;
+    const maxTurns = 15;
 
     for (let turn = 1; turn <= maxTurns; turn++) {
-      console.log(`\n=== Turn ${turn} ===\n`);
-
+      console.log(`\n=== Turn ${turn} ===`);
       const response = await callLLM(messages);
 
-      if (!response.choices || !response.choices[0]?.message) {
-        console.error("[ERROR] Invalid LLM response:", response);
+      if (!response.choices?.[0]?.message) {
+        console.error("[ERROR] Invalid response");
         break;
       }
 
       const message = response.choices[0].message;
-
-      if (message.content) {
-        console.log(`[${LLM_PROVIDER.toUpperCase()}] ${message.content}`);
-      }
+      if (message.content) console.log(`[${LLM_PROVIDER.toUpperCase()}] ${message.content}`);
 
       messages.push({
         role: "assistant",
@@ -510,76 +466,41 @@ async function main() {
         ...(message.tool_calls && { tool_calls: message.tool_calls })
       });
 
-      if (!message.tool_calls || message.tool_calls.length === 0) {
-        consecutiveNoTradeTurns++;
-
-        if (consecutiveNoTradeTurns >= 3 || (tradeCount === 0 && turn >= 5)) {
-          console.log("[WARNING] No trades detected. Forcing trade execution...");
-
-          const account = await executeTool("get_account", {});
-          const cash = parseFloat(account.cash);
-
-          const safeTrade = {
-            symbol: "SPY",
-            qty: Math.floor((cash * 0.1) / 300),
-            side: "buy",
-            reason: "システムによる安全な取引実行: 分散投資のためのSPY購入"
-          };
-
-          if (safeTrade.qty > 0) {
-            console.log(`[FORCED TRADE] Executing safe trade: ${JSON.stringify(safeTrade)}`);
-            messages.push({
-              role: "user",
-              content: `直ちに以下の取引を実行してください: place_order(${JSON.stringify(safeTrade)})`
-            });
-            consecutiveNoTradeTurns = 0;
-            continue;
-          } else {
-            console.log("[FORCED TRADE] Insufficient funds for safe trade. Adjusting quantity...");
-            messages.push({
-              role: "user",
-              content: "直ちにSPYを1株購入してください。理由: システムによる最小限の取引実行"
-            });
-            consecutiveNoTradeTurns = 0;
-            continue;
-          }
+      if (!message.tool_calls?.length) {
+        if (tradeCount === 0 && turn < maxTurns) {
+          messages.push({ role: "user", content: "取引がまだ実行されていません。place_orderで取引を実行してください。" });
+          continue;
         }
-
-        console.log("\n=== Session Complete ===");
         break;
-      } else {
-        consecutiveNoTradeTurns = 0;
+      }
 
-        const toolResults = [];
-        for (const toolCall of message.tool_calls) {
-          const funcName = toolCall.function.name;
-          const funcArgs = JSON.parse(toolCall.function.arguments);
+      for (const toolCall of message.tool_calls) {
+        const funcName = toolCall.function.name;
+        const funcArgs = JSON.parse(toolCall.function.arguments);
+        console.log(`[TOOL] ${funcName}`, funcArgs);
+        const result = await executeTool(funcName, funcArgs);
+        console.log(`[RESULT]`, result);
 
-          console.log(`[TOOL] ${funcName}`, funcArgs);
-          const result = await executeTool(funcName, funcArgs);
-          console.log(`[RESULT]`, result);
+        // ツール名を保存して後でfunctionResponseで使用
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          tool_name: funcName,
+          content: JSON.stringify(result)
+        });
 
-          if (funcName === "place_order" && result.id) {
-            tradeCount++;
-            console.log(`[TRADE COUNT] ${tradeCount}`);
-          }
-
-          toolResults.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result)
-          });
+        if (funcName === "place_order" && result.id) {
+          tradeCount++;
+          console.log(`[TRADE COUNT] ${tradeCount}`);
         }
-
-        messages.push(...toolResults);
       }
     }
   } catch (error) {
     console.error("[MAIN ERROR]", error.message);
+    await endSession(error);
   } finally {
     await endSession();
   }
 }
 
-// 実行
 main().catch(console.error);
