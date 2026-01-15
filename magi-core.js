@@ -8,16 +8,22 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
 const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral';
-// ===== 按分設定（ここで一元管理）=====
-const BUDGET_ALLOCATIONS = {
-  'mistral_NORMAL': 0.25,    // SOPHIA-5
-  'google_NORMAL': 0.25,     // MELCHIOR-1
-  'groq_NORMAL': 0.25,       // ANIMA (通常)
-  'groq_SCALPING': 0.25      // ANIMA (スキャルピング)
-  // 新しいLLM追加時はここに追加
-  // 例: 'openai_NORMAL': 0.20
+// ===== 按分設定（自動計算）=====
+// 新LLM追加時は「1」を追加するだけで自動按分！
+const BUDGET_WEIGHTS = {
+  'mistral_NORMAL': 1,     // SOPHIA-5
+  'google_NORMAL': 1,      // MELCHIOR-1
+  'groq_NORMAL': 1,        // ANIMA (通常)
+  'groq_SCALPING': 1       // ANIMA (スキャルピング)
+  // 例: 'openai_NORMAL': 1  ← 追加すると自動で5等分(20%)になる
 };
-// 合計: 1.0 (100%) であることを確認
+
+// 合計から自動計算（編集不要）
+const TOTAL_WEIGHT = Object.values(BUDGET_WEIGHTS).reduce((a, b) => a + b, 0);
+function getAllocation(provider, mode) {
+  const key = provider + '_' + mode;
+  return (BUDGET_WEIGHTS[key] || 1) / TOTAL_WEIGHT;
+}
 // =====================================
 const bigquery = new BigQuery({ projectId: 'screen-share-459802' });
 const dataset = bigquery.dataset('magi_core');
@@ -149,12 +155,9 @@ async function executeTool(toolName, params) {
           "https://paper-api.alpaca.markets/v2/account",
           { headers: alpacaHeaders }
         );
-        const accountData = await accountResponse.json();
-        
-        // 按分率を取得（設定から自動計算）
-        const allocationKey = LLM_PROVIDER + '_' + tradeMode;
-        const allocation = BUDGET_ALLOCATIONS[allocationKey] || 0.25;
-        
+        const accountData = await accountResponse.json();  
+        // 按分率を取得（自動計算）
+        const allocation = getAllocation(LLM_PROVIDER, tradeMode);
         // 按分された値を返す
         return {
           equity: (parseFloat(accountData.equity) * allocation).toFixed(2),
