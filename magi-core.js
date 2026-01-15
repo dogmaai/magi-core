@@ -14,6 +14,7 @@ const dataset = bigquery.dataset('magi_core');
 const analyticsDataset = bigquery.dataset('magi_analytics');
 let sessionId = null;
 let startingEquity = null;
+let tradeMode = null;
 
 async function safeInsert(tableName, rows, useAnalytics = false) {
   const maxRetries = 3;
@@ -171,7 +172,8 @@ async function executeTool(toolName, params) {
           side: params.side,
           qty: params.qty,
           price: orderResult.filled_avg_price || null,
-          reason: params.reason
+          reason: params.reason,
+          trade_mode: tradeMode
         }]);
         return orderResult;
 
@@ -207,8 +209,8 @@ async function executeTool(toolName, params) {
           price_target: params.price_target || null,
           time_horizon: params.time_horizon || null,
           actual_price_at_analysis: currentPrice,
-          prompt_template: 'magi-core-v3.3-autonomous',
-          metadata: JSON.stringify({ session_id: sessionId })
+          prompt_template: 'magi-core-v3.4-autonomous',
+          metadata: JSON.stringify({ session_id: sessionId, trade_mode: tradeMode })
         };
 
         console.log("[ANALYSIS] " + params.symbol + ": " + params.action + " (" + (params.confidence * 100).toFixed(0) + "%)");
@@ -219,7 +221,8 @@ async function executeTool(toolName, params) {
         await safeInsert('thoughts', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
-          content: "[" + params.symbol + "] " + params.action + " @ " + (params.confidence * 100).toFixed(0) + "% - " + params.reasoning
+          content: "[" + params.symbol + "] " + params.action + " @ " + (params.confidence * 100).toFixed(0) + "% - " + params.reasoning,
+          trade_mode: tradeMode
         }]);
         
         return { status: "analysis_logged", id: analysisRecord.id };
@@ -291,7 +294,6 @@ async function callLLM(messages) {
         }
       }
 
-      // デバッグ: Geminiに送信するメッセージを確認
       console.log("[GEMINI DEBUG] Messages count:", geminiMessages.length);
       console.log("[GEMINI DEBUG] Last message:", JSON.stringify(geminiMessages[geminiMessages.length - 1], null, 2));
       
@@ -467,6 +469,7 @@ async function callLLM(messages) {
 
 async function startSession() {
   sessionId = uuidv4();
+  tradeMode = process.env.SCALPING_MODE === 'true' ? 'SCALPING' : 'NORMAL';
   const account = await executeTool("get_account", {});
   await safeInsert('sessions', [{
     session_id: sessionId,
@@ -474,11 +477,13 @@ async function startSession() {
     llm_provider: LLM_PROVIDER,
     llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
-    total_trades: 0
+    total_trades: 0,
+    trade_mode: tradeMode
   }]);
   startingEquity = parseFloat(account.equity);
   console.log("[SESSION] Started: " + sessionId);
   console.log("[SESSION] Starting equity: $" + startingEquity);
+  console.log("[SESSION] Trade mode: " + tradeMode);
   return sessionId;
 }
 
@@ -492,7 +497,8 @@ async function endSession(error = null) {
       session_id: sessionId,
       ended_at: new Date().toISOString(),
       ending_equity: endingEquity,
-      pnl, pnl_percent: pnlPercent,
+      pnl: pnl,
+      pnl_percent: pnlPercent,
     }]);
     await safeInsert('portfolio_snapshots', [{
       timestamp: new Date().toISOString(),
@@ -511,13 +517,12 @@ async function endSession(error = null) {
 }
 
 async function main() {
-  console.log("=== MAGI Core v3.3 (" + LLM_PROVIDER.toUpperCase() + ") ===\n");
+  console.log("=== MAGI Core v3.4 (" + LLM_PROVIDER.toUpperCase() + ") ===\n");
   let tradeCount = 0;
 
   try {
     await startSession();
 
-    // スキャルピングモード判定
     const isScalping = process.env.SCALPING_MODE === 'true';
     
     const scalpingPrompt = `あなたは超短期スキャルピングトレーダーです。
@@ -547,7 +552,7 @@ async function main() {
 - 複数の指標を計算すること
 - 迷うこと`;
 
- const normalPrompt = "あなたは自律的なトレーダーです。\n\n【ミッション】1年間で資産を最大限増やすこと。\n\n【環境】\n- Alpaca Paper Trading口座（米国株）\n- 初期資金: $100,000\n\n【利用可能なツール】\n- get_price: 銘柄の現在価格を取得\n- get_positions: 保有ポジションを確認\n- get_account: 口座残高・購買力を確認\n- log_analysis: 分析結果を記録（取引前に必須）\n- place_order: 売買注文を実行\n\n【必須フロー】\n1. get_accountで残高確認\n2. get_priceで価格確認\n3. log_analysisで詳細な分析を記録（重要！）\n   - reasoning: なぜこの判断に至ったか詳細に\n   - hypothesis: 今後の価格予想\n   - observations: 気づいたこと\n   - concerns: リスク・懸念点\n4. place_orderで取引実行\n\n【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD\n\n【重要】\n- log_analysisで必ず分析理由を記録してから 取引すること\n- reasoningは詳細に書くこと（後で機械学習に使用）\n- 分析だけで終わらず、必ず取引を実行すること";
+    const normalPrompt = "あなたは自律的なトレーダーです。\n\n【ミッション】1年間で資産を最大限増やすこと。\n\n【環境】\n- Alpaca Paper Trading口座（米国株）\n- 初期資金: $100,000\n\n【利用可能なツール】\n- get_price: 銘柄の現在価格を取得\n- get_positions: 保有ポジションを確認\n- get_account: 口座残高・購買力を確認\n- log_analysis: 分析結果を記録（取引前に必須）\n- place_order: 売買注文を実行\n\n【必須フロー】\n1. get_accountで残高確認\n2. get_priceで価格確認\n3. log_analysisで詳細な分析を記録（重要！）\n   - reasoning: なぜこの判断に至ったか詳細に\n   - hypothesis: 今後の価格予想\n   - observations: 気づいたこと\n   - concerns: リスク・懸念点\n4. place_orderで取引実行\n\n【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD\n\n【重要】\n- log_analysisで必ず分析理由を記録してから取引すること\n- reasoningは詳細に書くこと（後で機械学習に使用）\n- 分析だけで終わらず、必ず取引を実行すること";
 
     const systemPrompt = isScalping ? scalpingPrompt : normalPrompt;
     const userPrompt = isScalping 
@@ -618,3 +623,4 @@ async function main() {
 }
 
 main().catch(console.error);
+
