@@ -291,6 +291,10 @@ async function callLLM(messages) {
         }
       }
 
+      // デバッグ: Geminiに送信するメッセージを確認
+      console.log("[GEMINI DEBUG] Messages count:", geminiMessages.length);
+      console.log("[GEMINI DEBUG] Last message:", JSON.stringify(geminiMessages[geminiMessages.length - 1], null, 2));
+      
       const geminiBody = {
         contents: geminiMessages,
         ...(systemInstruction && { system_instruction: systemInstruction }),
@@ -513,11 +517,48 @@ async function main() {
   try {
     await startSession();
 
-    const systemPrompt = "あなたは自律的なトレーダーです。\n\n【ミッション】1年間で資産を最大限増やすこと。\n\n【環境】\n- Alpaca Paper Trading口座（米国株）\n- 初期資金: $100,000\n\n【利用可能なツール】\n- get_price: 銘柄の現在価格を取得\n- get_positions: 保有ポジションを確認\n- get_account: 口座残高・購買力を確認\n- log_analysis: 分析結果を記録（取引前に必須）\n- place_order: 売買注文を実行\n\n【必須フロー】\n1. get_accountで残高確認\n2. get_priceで価格確認\n3. log_analysisで詳細な分析を記録（重要！）\n   - reasoning: なぜこの判断に至ったか詳細に\n   - hypothesis: 今後の価格予想\n   - observations: 気づいたこと\n   - concerns: リスク・懸念点\n4. place_orderで取引実行\n\n【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD\n\n【重要】\n- log_analysisで必ず分析理由を記録してから取引すること\n- reasoningは詳細に書くこと（後で機械学習に使用）\n- 分析だけで終わらず、必ず取引を実行すること";
+    // スキャルピングモード判定
+    const isScalping = process.env.SCALPING_MODE === 'true';
+    
+    const scalpingPrompt = `あなたは超短期スキャルピングトレーダーです。
+
+【ミッション】
+素早く小さな利益を積み重ねる。深い分析より速度重視。
+
+【ルール】
+- 考えすぎない。直感で判断
+- 1回の取引は$50以下
+- 理由は一言でOK（例：「上昇中」「出来高増」）
+- 複数銘柄を素早くチェックして、動きのある銘柄を狙う
+
+【フロー】
+1. get_account → 残高確認（1回だけ）
+2. get_price → 複数銘柄を連続でチェック（AAPL, NVDA, TSLA, AMD）
+3. 最も動きがありそうな銘柄を選ぶ
+4. place_order → 即座に注文（log_analysisは省略OK）
+
+【判断基準】
+- 価格が切りの良い数字に近い
+- 直近の動きがありそう
+- それだけ。深く考えない。
+
+【禁止】
+- 長い分析文を書くこと
+- 複数の指標を計算すること
+- 迷うこと`;
+
+ const normalPrompt = "あなたは自律的なトレーダーです。\n\n【ミッション】1年間で資産を最大限増やすこと。\n\n【環境】\n- Alpaca Paper Trading口座（米国株）\n- 初期資金: $100,000\n\n【利用可能なツール】\n- get_price: 銘柄の現在価格を取得\n- get_positions: 保有ポジションを確認\n- get_account: 口座残高・購買力を確認\n- log_analysis: 分析結果を記録（取引前に必須）\n- place_order: 売買注文を実行\n\n【必須フロー】\n1. get_accountで残高確認\n2. get_priceで価格確認\n3. log_analysisで詳細な分析を記録（重要！）\n   - reasoning: なぜこの判断に至ったか詳細に\n   - hypothesis: 今後の価格予想\n   - observations: 気づいたこと\n   - concerns: リスク・懸念点\n4. place_orderで取引実行\n\n【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD\n\n【重要】\n- log_analysisで必ず分析理由を記録してから 取引すること\n- reasoningは詳細に書くこと（後で機械学習に使用）\n- 分析だけで終わらず、必ず取引を実行すること";
+
+    const systemPrompt = isScalping ? scalpingPrompt : normalPrompt;
+    const userPrompt = isScalping 
+      ? "スキャルピング開始。素早く判断して取引せよ。"
+      : "取引を開始してください。get_account → get_price → log_analysis → place_order の順で実行してください。log_analysisでは必ず詳細な分析理由を記録してください。";
+    
+    console.log("[MODE] " + (isScalping ? "SCALPING" : "NORMAL"));
 
     let messages = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: "取引を開始してください。get_account → get_price → log_analysis → place_order の順で実行してください。log_analysisでは必ず詳細な分析理由を記録してください。" }
+      { role: "user", content: userPrompt }
     ];
 
     const maxTurns = 15;
