@@ -331,7 +331,9 @@ async function main() {
     3. 分析だけで終わらず、必ず行動に移すこと
     4. 同じ思考を2回以上繰り返さないこと
     5. ポートフォリオが空なら、必ず何か買うこと
-
+【監視銘柄（テック株）】
+AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORCL, NFLX, UBER, SHOP
+この中から選んで取引してください。
     【制約】
     - 1銘柄への投資は総資金の20%まで
     - 1日の取引回数は10回まで
