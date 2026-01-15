@@ -4,7 +4,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
 const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral';
@@ -194,8 +193,8 @@ async function executeTool(toolName, params) {
           symbol: params.symbol,
           topic: null,
           llm_provider: LLM_PROVIDER,
-          llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : 'mistral-small-latest',
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : 'SOPHIA-5',
+          llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : 'mistral-small-latest',
+          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : 'SOPHIA-5',
           input_type: 'market_data',
           input_summary: "Session " + sessionId + " - Real-time analysis",
           reasoning: params.reasoning,
@@ -362,52 +361,6 @@ async function callLLM(messages) {
       }]);
 
       return result;
-    } else if (LLM_PROVIDER === 'groq') {
-      provider = 'groq';
-      model = 'llama-3.3-70b-versatile';
-      response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + GROQ_API_KEY
-        },
-        body: JSON.stringify({ 
-          model, 
-          messages: messages.map(m => {
-            if (m.role === 'tool') {
-              const { tool_name, ...rest } = m;
-              return rest;
-            }
-            return m;
-          }), 
-          tools, 
-          tool_choice: "auto" 
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("[GROQ ERROR]", response.status, errorData);
-        throw new Error("Groq API error: " + response.status);
-      }
-
-      const groqResponse = await response.json();
-      const responseTimeMs = Date.now() - startTime;
-      inputTokens = groqResponse.usage?.prompt_tokens || 0;
-      outputTokens = groqResponse.usage?.completion_tokens || 0;
-      costUsd = (inputTokens * 0.59 + outputTokens * 0.79) / 1000000;
-
-      await safeInsert('llm_metrics', [{
-        session_id: sessionId,
-        timestamp: new Date().toISOString(),
-        provider, model,
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        response_time_ms: responseTimeMs,
-        cost_usd: costUsd,
-      }]);
-
-      return groqResponse;
     } else {
       provider = 'mistral';
       model = 'mistral-small-latest';
@@ -468,7 +421,7 @@ async function startSession() {
     session_id: sessionId,
     started_at: new Date().toISOString(),
     llm_provider: LLM_PROVIDER,
-    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : 'mistral-small-latest',
+    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0
   }]);
