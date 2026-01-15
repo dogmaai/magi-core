@@ -232,7 +232,7 @@ async function callLLM(messages) {
   try {
     if (LLM_PROVIDER === 'google') {
       provider = 'google';
-      model = 'gemini-2.0-flash-exp';
+      model = 'gemini-2.5-flash-preview-05-20';
       const geminiMessages = messages.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'model',
         parts: [{ text: msg.content || '' }],
@@ -386,7 +386,7 @@ async function startSession() {
     session_id: sessionId,
     started_at: new Date().toISOString(),
     llm_provider: LLM_PROVIDER,
-    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash-exp' : 'mistral-small-latest',
+    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.5-flash-preview-05-20' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0
   }]);
