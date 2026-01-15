@@ -487,9 +487,9 @@ async function callLLM(messages) {
         response_time_ms: responseTimeMs,
         cost_usd: costUsd,
       }]);
-
       return deepseekResponse;
- else {
+
+    } else {
       provider = 'mistral';
       model = 'mistral-small-latest';
       response = await fetch("https://api.mistral.ai/v1/chat/completions", {
