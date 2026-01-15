@@ -4,8 +4,10 @@ import { v4 as uuidv4 } from 'uuid';
 
 // 環境変数
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
+const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral'; // デフォルトはmistral
 
 // BigQuery初期化
 const bigquery = new BigQuery({ projectId: 'screen-share-459802' });
@@ -50,7 +52,7 @@ const alpacaHeaders = {
   'Content-Type': 'application/json',
 };
 
-// **完全版: Mistral API用ツール定義**
+// **ツール定義（変更なし）**
 const tools = [
   {
     type: "function",
@@ -208,29 +210,161 @@ async function executeTool(toolName, params) {
   }
 }
 
-// **完全版: Mistral API呼び出し関数**
-async function callMistral(messages) {
-  const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${MISTRAL_API_KEY}`
+// **Gemini API用のツール定義（Function Calling対応）**
+const geminiTools = {
+  tools: [
+    {
+      function_declarations: tools.map(tool => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters,
+      })),
     },
-    body: JSON.stringify({
-      model: "mistral-small-latest",
-      messages: messages,
-      tools: tools,
-      tool_choice: "auto"
-    })
-  });
+  ]  // ✅ 修正済み: セミコロンを削除
+};
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    console.error("[MISTRAL ERROR]", response.status, errorData);
-    throw new Error(`Mistral API error: ${response.status}`);
+// **LLM API呼び出し関数（マルチプロバイダ対応）**
+async function callLLM(messages) {
+  const startTime = Date.now();
+  let response;
+  let provider, model, inputTokens, outputTokens, costUsd;
+
+  try {
+    if (LLM_PROVIDER === 'google') {
+      provider = 'google';
+      model = 'gemini-2.0-flash-exp';
+      const geminiMessages = messages.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content || '' }],
+      }));
+
+      const geminiBody = {
+        contents: geminiMessages,
+        tools: geminiTools,
+        tool_config: { function_calling_config: 'ANY' },
+      };
+
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(geminiBody),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("[GEMINI ERROR]", response.status, errorData);
+        throw new Error(`Gemini API error: ${response.status}`);
+      }
+
+      const geminiResponse = await response.json();
+      const responseTimeMs = Date.now() - startTime;
+
+      // GeminiレスポンスをOpenAI形式に変換
+      const candidate = geminiResponse.candidates?.[0];
+      if (!candidate) {
+        throw new Error("No candidate in Gemini response");
+      }
+
+      const content = candidate.content;
+      const functionCalls = content.parts
+        .filter(part => part.functionCall)
+        .map(part => ({
+          id: uuidv4(),
+          type: "function",
+          function: {
+            name: part.functionCall.name,
+            arguments: JSON.stringify(part.functionCall.args),
+          },
+        }));
+
+      const result = {
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: content.parts
+                .filter(part => part.text)
+                .map(part => part.text)
+                .join("\n"),
+              tool_calls: functionCalls.length > 0 ? functionCalls : undefined,
+            },
+          },
+        ],
+        usage: {
+          prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
+          completion_tokens: geminiResponse.usageMetadata?.candidatesTokenCount || 0,
+        },
+      };
+
+      inputTokens = result.usage.prompt_tokens;
+      outputTokens = result.usage.completion_tokens;
+      costUsd = (inputTokens * 0.0 + outputTokens * 0.0) / 1000000; // Geminiのコスト計算（無料モデルのため0）
+
+      // llm_metrics記録
+      await safeInsert('llm_metrics', [{
+        session_id: sessionId,
+        timestamp: new Date().toISOString(),
+        provider,
+        model,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        response_time_ms: responseTimeMs,
+        cost_usd: costUsd,
+      }]);
+
+      return result;
+    } else {
+      // Mistral（既存ロジック）
+      provider = 'mistral';
+      model = 'mistral-small-latest';
+      response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${MISTRAL_API_KEY}`
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          tools,
+          tool_choice: "auto"
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("[MISTRAL ERROR]", response.status, errorData);
+        throw new Error(`Mistral API error: ${response.status}`);
+      }
+
+      const mistralResponse = await response.json();
+      const responseTimeMs = Date.now() - startTime;
+
+      inputTokens = mistralResponse.usage?.prompt_tokens || 0;
+      outputTokens = mistralResponse.usage?.completion_tokens || 0;
+      costUsd = (inputTokens * 0.1 + outputTokens * 0.3) / 1000000; // Mistralのコスト計算
+
+      // llm_metrics記録
+      await safeInsert('llm_metrics', [{
+        session_id: sessionId,
+        timestamp: new Date().toISOString(),
+        provider,
+        model,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        response_time_ms: responseTimeMs,
+        cost_usd: costUsd,
+      }]);
+
+      return mistralResponse;
+    }
+  } catch (error) {
+    console.error(`[${provider.toUpperCase()} ERROR]`, error.message);
+    throw error;
   }
-
-  return await response.json();
 }
 
 // セッション開始（強化版）
@@ -241,8 +375,8 @@ async function startSession() {
   const sessionLogged = await safeInsert('sessions', [{
     session_id: sessionId,
     started_at: new Date().toISOString(),
-    llm_provider: 'mistral',
-    llm_model: 'mistral-small-latest',
+    llm_provider: LLM_PROVIDER,
+    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash-exp' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0
   }]);
@@ -295,17 +429,16 @@ async function endSession() {
   }
 }
 
-// **修正: 取引強制ロジックを追加したメインループ**
+// **メインループ（変更なし）**
 async function main() {
-  console.log("=== MAGI Core v2.1 (Mistral) ===\n");
+  console.log(`=== MAGI Core v3.0 (${LLM_PROVIDER.toUpperCase()}) ===\n`);
 
-  let tradeCount = 0;  // 取引カウンター
-  let consecutiveNoTradeTurns = 0;  // 取引なし連続ターン数
+  let tradeCount = 0;
+  let consecutiveNoTradeTurns = 0;
 
   try {
     await startSession();
 
-    // **強化版: 取引必須のシステムプロンプト**
     const systemPrompt = `
     あなたは自律的なトレーダーです。
 
@@ -331,9 +464,9 @@ async function main() {
     3. 分析だけで終わらず、必ず行動に移すこと
     4. 同じ思考を2回以上繰り返さないこと
     5. ポートフォリオが空なら、必ず何か買うこと
-【監視銘柄（テック株）】
-AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORCL, NFLX, UBER, SHOP
-この中から選んで取引してください。
+    【監視銘柄（テック株）】
+    AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORCL, NFLX, UBER, SHOP
+    この中から選んで取引してください。
     【制約】
     - 1銘柄への投資は総資金の20%まで
     - 1日の取引回数は10回まで
@@ -360,17 +493,17 @@ AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORC
     for (let turn = 1; turn <= maxTurns; turn++) {
       console.log(`\n=== Turn ${turn} ===\n`);
 
-      const response = await callMistral(messages);
+      const response = await callLLM(messages);
 
       if (!response.choices || !response.choices[0]?.message) {
-        console.error("[ERROR] Invalid Mistral response:", response);
+        console.error("[ERROR] Invalid LLM response:", response);
         break;
       }
 
       const message = response.choices[0].message;
 
       if (message.content) {
-        console.log(`[MISTRAL] ${message.content}`);
+        console.log(`[${LLM_PROVIDER.toUpperCase()}] ${message.content}`);
       }
 
       messages.push({
@@ -379,22 +512,18 @@ AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORC
         ...(message.tool_calls && { tool_calls: message.tool_calls })
       });
 
-      // **修正: 取引強制ロジック**
       if (!message.tool_calls || message.tool_calls.length === 0) {
         consecutiveNoTradeTurns++;
 
-        // 3ターン連続で取引なしの場合、強制的に取引を促す
         if (consecutiveNoTradeTurns >= 3 || (tradeCount === 0 && turn >= 5)) {
           console.log("[WARNING] No trades detected. Forcing trade execution...");
 
-          // 現在の口座情報を取得
           const account = await executeTool("get_account", {});
           const cash = parseFloat(account.cash);
 
-          // 安全な取引を提案
           const safeTrade = {
-            symbol: "SPY",  // 安定したETF
-            qty: Math.floor((cash * 0.1) / 300),  // 10%の資金でSPYを購入（1株≒$300と仮定）
+            symbol: "SPY",
+            qty: Math.floor((cash * 0.1) / 300),
             side: "buy",
             reason: "システムによる安全な取引実行: 分散投資のためのSPY購入"
           };
@@ -405,11 +534,10 @@ AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORC
               role: "user",
               content: `直ちに以下の取引を実行してください: place_order(${JSON.stringify(safeTrade)})`
             });
-            consecutiveNoTradeTurns = 0;  // リセット
+            consecutiveNoTradeTurns = 0;
             continue;
           } else {
             console.log("[FORCED TRADE] Insufficient funds for safe trade. Adjusting quantity...");
-            // 資金が少ない場合は1株だけ購入
             messages.push({
               role: "user",
               content: "直ちにSPYを1株購入してください。理由: システムによる最小限の取引実行"
@@ -422,9 +550,8 @@ AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORC
         console.log("\n=== Session Complete ===");
         break;
       } else {
-        consecutiveNoTradeTurns = 0;  // 取引があったのでリセット
+        consecutiveNoTradeTurns = 0;
 
-        // ツール実行
         const toolResults = [];
         for (const toolCall of message.tool_calls) {
           const funcName = toolCall.function.name;
@@ -434,7 +561,6 @@ AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC, AVGO, QCOM, CRM, ADBE, ORC
           const result = await executeTool(funcName, funcArgs);
           console.log(`[RESULT]`, result);
 
-          // 取引カウント
           if (funcName === "place_order" && result.id) {
             tradeCount++;
             console.log(`[TRADE COUNT] ${tradeCount}`);
