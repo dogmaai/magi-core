@@ -239,7 +239,7 @@ async function callLLM(messages) {
       const geminiBody = {
         contents: geminiMessages,
         tools: geminiTools,
-        tool_config: { function_calling_config: 'ANY' },
+        tool_config: { function_calling_config: { mode: 'ANY' } },
       };
 
       response = await fetch(
