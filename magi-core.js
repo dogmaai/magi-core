@@ -239,10 +239,20 @@ async function callLLM(messages) {
       }));
 
       const geminiBody = {
-        contents: geminiMessages,
-        tools: geminiTools,
-        tool_config: { function_calling_config: 'ANY' },
-      };
+  contents: geminiMessages,
+  tools: [{
+    functionDeclarations: tools.map(tool => ({
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters,
+    }))
+  }],
+  toolConfig: {
+    functionCallingConfig: {
+      mode: "AUTO"
+    }
+  }
+};
 
       response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
