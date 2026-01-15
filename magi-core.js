@@ -386,7 +386,7 @@ async function startSession() {
     session_id: sessionId,
     started_at: new Date().toISOString(),
     llm_provider: LLM_PROVIDER,
-    llm_model: LLM_PROVIDER === 'google' ? ''gemini-1.5-flash-latest'' : 'mistral-small-latest',
+    llm_model: LLM_PROVIDER === 'google' ? 'gemini-1.5-flash-latest' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0
   }]);
