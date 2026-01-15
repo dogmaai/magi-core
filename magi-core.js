@@ -8,7 +8,17 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
 const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral';
-
+// ===== 按分設定（ここで一元管理）=====
+const BUDGET_ALLOCATIONS = {
+  'mistral_NORMAL': 0.25,    // SOPHIA-5
+  'google_NORMAL': 0.25,     // MELCHIOR-1
+  'groq_NORMAL': 0.25,       // ANIMA (通常)
+  'groq_SCALPING': 0.25      // ANIMA (スキャルピング)
+  // 新しいLLM追加時はここに追加
+  // 例: 'openai_NORMAL': 0.20
+};
+// 合計: 1.0 (100%) であることを確認
+// =====================================
 const bigquery = new BigQuery({ projectId: 'screen-share-459802' });
 const dataset = bigquery.dataset('magi_core');
 const analyticsDataset = bigquery.dataset('magi_analytics');
@@ -139,8 +149,22 @@ async function executeTool(toolName, params) {
           "https://paper-api.alpaca.markets/v2/account",
           { headers: alpacaHeaders }
         );
-        return await accountResponse.json();
-
+        const accountData = await accountResponse.json();
+        
+        // 按分率を取得（設定から自動計算）
+        const allocationKey = LLM_PROVIDER + '_' + tradeMode;
+        const allocation = BUDGET_ALLOCATIONS[allocationKey] || 0.25;
+        
+        // 按分された値を返す
+        return {
+          equity: (parseFloat(accountData.equity) * allocation).toFixed(2),
+          cash: (parseFloat(accountData.cash) * allocation).toFixed(2),
+          buying_power: (parseFloat(accountData.buying_power) * allocation).toFixed(2),
+          portfolio_value: (parseFloat(accountData.portfolio_value || 0) * allocation).toFixed(2),
+          allocation_percent: (allocation * 100).toFixed(0) + '%',
+          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : 'SOPHIA-5',
+          _note: 'This is your allocated budget share.'
+        };
       case "get_positions":
         const positionsResponse = await fetch(
           "https://paper-api.alpaca.markets/v2/positions",
