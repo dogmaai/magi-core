@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
 const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral';
@@ -14,7 +15,8 @@ const BUDGET_WEIGHTS = {
   'mistral_NORMAL': 1,     // SOPHIA-5
   'google_NORMAL': 1,      // MELCHIOR-1
   'groq_NORMAL': 1,        // ANIMA (通常)
-  'groq_SCALPING': 1       // ANIMA (スキャルピング)
+  'groq_SCALPING': 1,
+  'deepseek_NORMAL': 1       // ANIMA (スキャルピング)
   // 例: 'openai_NORMAL': 1  ← 追加すると自動で5等分(20%)になる
 };
 
@@ -165,7 +167,7 @@ async function executeTool(toolName, params) {
           buying_power: (parseFloat(accountData.buying_power) * allocation).toFixed(2),
           portfolio_value: (parseFloat(accountData.portfolio_value || 0) * allocation).toFixed(2),
           allocation_percent: (allocation * 100).toFixed(0) + '%',
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : 'SOPHIA-5',
+          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           _note: 'This is your allocated budget share.'
         };
       case "get_positions":
@@ -223,8 +225,8 @@ async function executeTool(toolName, params) {
           symbol: params.symbol,
           topic: null,
           llm_provider: LLM_PROVIDER,
-          llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : 'mistral-small-latest',
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : 'SOPHIA-5',
+          llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : LLM_PROVIDER === 'deepseek' ? 'deepseek-chat' : 'mistral-small-latest',
+          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           input_type: 'market_data',
           input_summary: "Session " + sessionId + " - Real-time analysis",
           reasoning: params.reasoning,
@@ -441,7 +443,53 @@ async function callLLM(messages) {
       }]);
 
       return groqResponse;
-    } else {
+    } else if (LLM_PROVIDER === 'deepseek') {
+      provider = 'deepseek';
+      model = 'deepseek-chat';
+      response = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + DEEPSEEK_API_KEY
+        },
+        body: JSON.stringify({ 
+          model, 
+          messages: messages.map(m => {
+            if (m.role === 'tool') {
+              const { tool_name, ...rest } = m;
+              return rest;
+            }
+            return m;
+          }), 
+          tools, 
+          tool_choice: "auto" 
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("[DEEPSEEK ERROR]", response.status, errorData);
+        throw new Error("DeepSeek API error: " + response.status);
+      }
+
+      const deepseekResponse = await response.json();
+      const responseTimeMs = Date.now() - startTime;
+      inputTokens = deepseekResponse.usage?.prompt_tokens || 0;
+      outputTokens = deepseekResponse.usage?.completion_tokens || 0;
+      costUsd = (inputTokens * 0.28 + outputTokens * 0.42) / 1000000;
+
+      await safeInsert('llm_metrics', [{
+        session_id: sessionId,
+        timestamp: new Date().toISOString(),
+        provider, model,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        response_time_ms: responseTimeMs,
+        cost_usd: costUsd,
+      }]);
+
+      return deepseekResponse;
+ else {
       provider = 'mistral';
       model = 'mistral-small-latest';
       response = await fetch("https://api.mistral.ai/v1/chat/completions", {
@@ -502,7 +550,7 @@ async function startSession() {
     session_id: sessionId,
     started_at: new Date().toISOString(),
     llm_provider: LLM_PROVIDER,
-    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : 'mistral-small-latest',
+    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : LLM_PROVIDER === 'deepseek' ? 'deepseek-chat' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0,
     trade_mode: tradeMode
