@@ -213,7 +213,7 @@ async function executeTool(toolName, params) {
 // **Gemini API用のツール定義（Function Calling対応）**
 const geminiTools = [
   {
-    function_declarations: tools.map(tool => ({
+    functionDeclarations: tools.map(tool => ({
       name: tool.function.name,
       description: tool.function.description,
       parameters: tool.function.parameters,
@@ -239,7 +239,7 @@ async function callLLM(messages) {
       const geminiBody = {
         contents: geminiMessages,
         tools: geminiTools,
-        tool_config: { function_calling_config: { mode: 'ANY' } },
+        tool_config: { function_calling_config: { mode: 'auto' } },
       };
 
       response = await fetch(
