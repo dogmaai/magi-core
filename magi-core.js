@@ -8,7 +8,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
-const LLM_PROVIDER = process.env.LLM_PROVIDER || 'mistral';
+function getLLMProvider() { return (process.env.LLM_PROVIDER || 'mistral').trim().toLowerCase(); }
 // ===== 按分設定（自動計算）=====
 // 新LLM追加時は「1」を追加するだけで自動按分！
 const BUDGET_WEIGHTS = {
@@ -167,7 +167,7 @@ async function executeTool(toolName, params) {
           buying_power: (parseFloat(accountData.buying_power) * allocation).toFixed(2),
           portfolio_value: (parseFloat(accountData.portfolio_value || 0) * allocation).toFixed(2),
           allocation_percent: (allocation * 100).toFixed(0) + '%',
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           _note: 'This is your allocated budget share.'
         };
       case "get_positions":
@@ -202,8 +202,8 @@ async function executeTool(toolName, params) {
           qty: params.qty,
           price: orderResult.filled_avg_price || null,
           reason: params.reason,
-          llm_provider: LLM_PROVIDER,
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
+          llm_provider: getLLMProvider(),
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           trade_mode: tradeMode
         }]);
         return orderResult;
@@ -226,9 +226,9 @@ async function executeTool(toolName, params) {
           created_at: new Date().toISOString(),
           symbol: params.symbol,
           topic: null,
-          llm_provider: LLM_PROVIDER,
-          llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : LLM_PROVIDER === 'deepseek' ? 'deepseek-chat' : 'mistral-small-latest',
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
+          llm_provider: getLLMProvider(),
+          llm_model: getLLMProvider() === 'google' ? 'gemini-2.0-flash' : getLLMProvider() === 'groq' ? 'llama-3.3-70b-versatile' : getLLMProvider() === 'deepseek' ? 'deepseek-chat' : 'mistral-small-latest',
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           input_type: 'market_data',
           input_summary: "Session " + sessionId + " - Real-time analysis",
           reasoning: params.reasoning,
@@ -253,8 +253,8 @@ async function executeTool(toolName, params) {
           session_id: sessionId,
           timestamp: new Date().toISOString(),
           content: "[" + params.symbol + "] " + params.action + " @ " + (params.confidence * 100).toFixed(0) + "% - " + params.reasoning,
-          llm_provider: LLM_PROVIDER,
-          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
+          llm_provider: getLLMProvider(),
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           symbol: params.symbol,
           action: params.action,
           reasoning: params.reasoning,
@@ -291,7 +291,7 @@ async function callLLM(messages) {
   let provider, model, inputTokens, outputTokens, costUsd;
 
   try {
-    if (LLM_PROVIDER === 'google') {
+    if (getLLMProvider() === 'google') {
       provider = 'google';
       model = 'gemini-2.0-flash';
 
@@ -407,7 +407,7 @@ async function callLLM(messages) {
       }]);
 
       return result;
-    } else if (LLM_PROVIDER === 'groq') {
+    } else if (getLLMProvider() === 'groq') {
       provider = 'groq';
       model = 'llama-3.3-70b-versatile';
       response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -453,7 +453,7 @@ async function callLLM(messages) {
       }]);
 
       return groqResponse;
-    } else if (LLM_PROVIDER === 'deepseek') {
+    } else if (getLLMProvider() === 'deepseek') {
       provider = 'deepseek';
       model = 'deepseek-chat';
       response = await fetch("https://api.deepseek.com/chat/completions", {
@@ -559,8 +559,8 @@ async function startSession() {
   await safeInsert('sessions', [{
     session_id: sessionId,
     started_at: new Date().toISOString(),
-    llm_provider: LLM_PROVIDER,
-    llm_model: LLM_PROVIDER === 'google' ? 'gemini-2.0-flash' : LLM_PROVIDER === 'groq' ? 'llama-3.3-70b-versatile' : LLM_PROVIDER === 'deepseek' ? 'deepseek-chat' : 'mistral-small-latest',
+    llm_provider: getLLMProvider(),
+    llm_model: getLLMProvider() === 'google' ? 'gemini-2.0-flash' : getLLMProvider() === 'groq' ? 'llama-3.3-70b-versatile' : getLLMProvider() === 'deepseek' ? 'deepseek-chat' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0,
     trade_mode: tradeMode
@@ -602,7 +602,7 @@ async function endSession(error = null) {
 }
 
 async function main() {
-  console.log("=== MAGI Core v3.4 (" + LLM_PROVIDER.toUpperCase() + ") ===\n");
+  console.log("=== MAGI Core v3.4 (" + getLLMProvider().toUpperCase() + ") ===\n");
   let tradeCount = 0;
 
   try {
@@ -663,7 +663,7 @@ async function main() {
       }
 
       const message = response.choices[0].message;
-      if (message.content) console.log("[" + LLM_PROVIDER.toUpperCase() + "] " + message.content);
+      if (message.content) console.log("[" + getLLMProvider().toUpperCase() + "] " + message.content);
 
       messages.push({
         role: "assistant",
