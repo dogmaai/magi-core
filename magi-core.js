@@ -202,6 +202,8 @@ async function executeTool(toolName, params) {
           qty: params.qty,
           price: orderResult.filled_avg_price || null,
           reason: params.reason,
+          llm_provider: LLM_PROVIDER,
+          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
           trade_mode: tradeMode
         }]);
         return orderResult;
@@ -251,6 +253,14 @@ async function executeTool(toolName, params) {
           session_id: sessionId,
           timestamp: new Date().toISOString(),
           content: "[" + params.symbol + "] " + params.action + " @ " + (params.confidence * 100).toFixed(0) + "% - " + params.reasoning,
+          llm_provider: LLM_PROVIDER,
+          unit_name: LLM_PROVIDER === 'google' ? 'MELCHIOR-1' : LLM_PROVIDER === 'groq' ? 'ANIMA' : LLM_PROVIDER === 'deepseek' ? 'CASPER' : 'SOPHIA-5',
+          symbol: params.symbol,
+          action: params.action,
+          reasoning: params.reasoning,
+          hypothesis: params.hypothesis || null,
+          confidence: params.confidence,
+          concerns: params.concerns || null,
           trade_mode: tradeMode
         }]);
         
