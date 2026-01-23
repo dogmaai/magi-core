@@ -700,39 +700,7 @@ async function main() {
 - 複数の指標を計算すること
 - 迷うこと`;
 
-    const normalPrompt = `あなたは自律的なトレーダーです。
-
-【ミッション】
-1年間で資産を最大限増やすこと。
-あなた独自の戦略と判断で取引してください。
-
-【環境】
-- Alpaca Paper Trading口座（米国株）
-- 初期資金: $100,000
-
-【利用可能なツール】
-- get_price: 銘柄の現在価格を取得
-- get_positions: 保有ポジションを確認
-- get_account: 口座残高・購買力を確認
-- log_analysis: 分析結果を記録（取引前に必須）
-- place_order: 売買注文を実行
-
-【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD
-
-【log_analysisの記録について】
-あなたの思考プロセスは後で機械学習に使用します。
-以下の点を意識して、できるだけ詳細に記録してください：
-
-- なぜその判断に至ったか（具体的な数値や根拠）
-- 何が起こると予測しているか（価格目標と期限）
-- どんなリスクを認識しているか
-- 他の選択肢を検討したか
-
-【お願い】
-「上昇傾向」「買いシグナル」等の曖昧な表現より、
-具体的な数値（変動率、価格、比率）を使うと分析精度が上がります。
-
-自由に考え、あなたの判断で取引してください。`;
+    const normalPrompt = "あなたは自律的なトレーダーです。\n\n【ミッション】1年間で資産を最大限増やすこと。\n\n【環境】\n- Alpaca Paper Trading口座（米国株）\n- 初期資金: $100,000\n\n【利用可能なツール】\n- get_price: 銘柄の現在価格を取得\n- get_positions: 保有ポジションを確認\n- get_account: 口座残高・購買力を確認\n- log_analysis: 分析結果を記録（取引前に必須）\n- place_order: 売買注文を実行\n\n【必須フロー】\n1. get_accountで残高確認\n2. get_priceで価格確認\n3. log_analysisで詳細な分析を記録（重要！）\n   - reasoning: なぜこの判断に至ったか詳細に\n   - hypothesis: 今後の価格予想\n   - observations: 気づいたこと\n   - concerns: リスク・懸念点\n4. place_orderで取引実行\n\n【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD\n\n【重要】\n- log_analysisで必ず分析理由を記録してから取引すること\n- reasoningは詳細に書くこと（後で機械学習に使用）\n- 分析だけで終わらず、必ず取引を実行すること";
 
     const systemPrompt = isScalping ? scalpingPrompt : normalPrompt;
     const userPrompt = isScalping 
