@@ -179,8 +179,7 @@ async function executeTool(toolName, params) {
         );
         return await positionsResponse.json();
 
-      
-       case "place_order":
+      case "place_order":
         const orderResponse = await fetch(
           "https://paper-api.alpaca.markets/v2/orders",
           {
@@ -196,24 +195,6 @@ async function executeTool(toolName, params) {
           }
         );
         const orderResult = await orderResponse.json();
-        
-        // 約定を待って価格を取得（最大5秒）
-        let filledPrice = orderResult.filled_avg_price || null;
-        if (!filledPrice && orderResult.id) {
-          for (let i = 0; i < 5; i++) {
-            await new Promise(r => setTimeout(r, 1000));
-            const checkRes = await fetch(
-              "https://paper-api.alpaca.markets/v2/orders/" + orderResult.id,
-              { headers: alpacaHeaders }
-            );
-            const checkOrder = await checkRes.json();
-            if (checkOrder.filled_avg_price) {
-              filledPrice = checkOrder.filled_avg_price;
-              break;
-            }
-          }
-        }
-        
         await safeInsert('trades', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
@@ -221,13 +202,13 @@ async function executeTool(toolName, params) {
           symbol: params.symbol,
           side: params.side,
           qty: params.qty,
-          price: filledPrice ? parseFloat(filledPrice) : null,
+          price: orderResult.filled_avg_price || null,
           reason: params.reason,
           llm_provider: getLLMProvider(),
           unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'BALTHASAR-6' : 'SOPHIA-5',
           trade_mode: tradeMode
         }]);
-        return orderResult; 
+        return orderResult;
 
       case "log_analysis":
         let currentPrice = null;
