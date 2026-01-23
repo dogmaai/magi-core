@@ -9,6 +9,36 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
+
+// Telegram通知
+async function sendTelegramNotification(message) {
+  try {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    if (!botToken || !chatId) {
+      console.log("[TELEGRAM] Token or Chat ID not configured");
+      return;
+    }
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: 'HTML'
+      })
+    });
+    if (response.ok) {
+      console.log("[TELEGRAM] Notification sent");
+    } else {
+      console.log("[TELEGRAM] Failed:", await response.text());
+    }
+  } catch (error) {
+    console.log("[TELEGRAM] Error:", error.message);
+  }
+}
+
 function getLLMProvider() { return (process.env.LLM_PROVIDER || 'mistral').trim().toLowerCase(); }
 // ===== 按分設定（自動計算）=====
 // 新LLM追加時は「1」を追加するだけで自動按分！
@@ -791,6 +821,16 @@ async function main() {
         if (funcName === "place_order" && result.id) {
           tradeCount++;
           console.log("[TRADE COUNT] " + tradeCount);
+          
+          // Telegram通知
+          const tradeMsg = `🔔 <b>MAGI Trade Alert</b>
+━━━━━━━━━━━━━━━
+📊 <b>${funcArgs.side.toUpperCase()}</b> ${funcArgs.symbol}
+📦 Qty: ${funcArgs.qty}
+🤖 LLM: ${getLLMProvider().toUpperCase()}
+⏰ ${new Date().toISOString()}
+━━━━━━━━━━━━━━━`;
+          sendTelegramNotification(tradeMsg);
         }
       }
     }
