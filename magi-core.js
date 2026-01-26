@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-
+const PROMPT_VERSION = "2.1";
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -255,7 +255,8 @@ async function executeTool(toolName, params) {
           reason: params.reason,
           llm_provider: getLLMProvider(),
           unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'BALTHASAR-6' : 'SOPHIA-5',
-          trade_mode: tradeMode
+          trade_mode:tradeMode,
+          prompt_version: PROMPT_VERSION
         }]);
         return orderResult; 
 
@@ -312,7 +313,8 @@ async function executeTool(toolName, params) {
           hypothesis: params.hypothesis || null,
           confidence: params.confidence,
           concerns: params.concerns || null,
-          trade_mode: tradeMode
+          trade_mode: tradeMode,
+          prompt_version: PROMPT_VERSION
         }]);
         
         return { status: "analysis_logged", id: analysisRecord.id };
@@ -696,6 +698,7 @@ async function endSession(error = null) {
 
 async function main() {
   console.log("=== MAGI Core v3.4 (" + getLLMProvider().toUpperCase() + ") ===\n");
+  console.log("[PROMPT] Version: " + PROMPT_VERSION);
   let tradeCount = 0;
 
   try {
