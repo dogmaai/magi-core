@@ -827,7 +827,6 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 - 迷うこと`;
 
     const provider = getLLMProvider();
-    const isScalping = process.env.SCALPING_MODE === 'true';
     
     // プロンプト選択
     let systemPrompt;
