@@ -244,6 +244,21 @@ async function executeTool(toolName, params) {
           }
         }
         
+        // フォールバック: 価格が取得できない場合は現在価格を使用
+        if (!filledPrice) {
+          try {
+            const fallbackRes = await fetch(
+              "https://data.alpaca.markets/v2/stocks/" + params.symbol + "/quotes/latest?feed=iex",
+              { headers: alpacaHeaders }
+            );
+            const fallbackData = await fallbackRes.json();
+            filledPrice = fallbackData.quote?.ap || fallbackData.quote?.bp || null;
+            if (filledPrice) console.log("[FALLBACK] Using market price for " + params.symbol + ": $" + filledPrice);
+          } catch (e) {
+            console.warn("[WARN] Could not get fallback price for " + params.symbol);
+          }
+        }
+        
         await safeInsert('trades', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
