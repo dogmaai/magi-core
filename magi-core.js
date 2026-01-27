@@ -832,7 +832,7 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 
 【フロー】
 1. get_account → 残高確認（1回だけ）
-2. get_price → 複数銘柄を連続でチェック（AAPL, NVDA, TSLA, AMD）
+2. get_price → 複数銘柄を連続でチェック（AAPL, NVDA, TSLA, AMD, MSFT, GOOGL, META, AMZN, CRM, ADBE, IONQ, RGTI, QBTS, JPM, BAC, GS, V, MA, UNH, JNJ, PFE, ABBV, LLY, WMT, COST, HD, MCD, SBUX, XOM, CVX, COP, SPY, QQQ, IWM）
 3. 最も動きがありそうな銘柄を選ぶ
 4. log_analysis → 簡潔に理由を記録
 5. place_order → 即座に注文
