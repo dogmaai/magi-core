@@ -355,12 +355,13 @@ async function callLLM(messages) {
         if (msg.role === 'system') {
           systemInstruction = { parts: [{ text: msg.content }] };
         } else if (msg.role === 'tool') {
+          // Gemini function response format
           geminiMessages.push({
-            role: 'user',
+            role: 'function',
             parts: [{
               functionResponse: {
                 name: msg.tool_name,
-                response: JSON.parse(msg.content)
+                response: { result: JSON.parse(msg.content) }
               }
             }]
           });
