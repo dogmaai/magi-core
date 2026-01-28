@@ -48,7 +48,7 @@ const BUDGET_WEIGHTS = {
   'groq_NORMAL': 1,        // ANIMA (通常)
   'groq_SCALPING': 1,
   'deepseek_NORMAL': 1,      // CASPER
-  'together_SCALPING': 1     // ORACLE (スキャルピング)
+  'together_SCALPING': 1     // BALTHASAR-6 (スキャルピング)
   // 例: 'openai_NORMAL': 1  ← 追加すると自動で5等分(20%)になる
 };
 
@@ -199,7 +199,7 @@ async function executeTool(toolName, params) {
           buying_power: (parseFloat(accountData.buying_power) * allocation).toFixed(2),
           portfolio_value: (parseFloat(accountData.portfolio_value || 0) * allocation).toFixed(2),
           allocation_percent: (allocation * 100).toFixed(0) + '%',
-          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'ORACLE' : 'SOPHIA-5',
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'BALTHASAR-6' : 'SOPHIA-5',
           _note: 'This is your allocated budget share.'
         };
       case "get_positions":
@@ -244,21 +244,6 @@ async function executeTool(toolName, params) {
           }
         }
         
-        // フォールバック: 価格が取得できない場合は現在価格を使用
-        if (!filledPrice) {
-          try {
-            const fallbackRes = await fetch(
-              "https://data.alpaca.markets/v2/stocks/" + params.symbol + "/quotes/latest?feed=iex",
-              { headers: alpacaHeaders }
-            );
-            const fallbackData = await fallbackRes.json();
-            filledPrice = fallbackData.quote?.ap || fallbackData.quote?.bp || null;
-            if (filledPrice) console.log("[FALLBACK] Using market price for " + params.symbol + ": $" + filledPrice);
-          } catch (e) {
-            console.warn("[WARN] Could not get fallback price for " + params.symbol);
-          }
-        }
-        
         await safeInsert('trades', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
@@ -269,7 +254,7 @@ async function executeTool(toolName, params) {
           price: filledPrice ? parseFloat(filledPrice) : null,
           reason: params.reason,
           llm_provider: getLLMProvider(),
-          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'ORACLE' : 'SOPHIA-5',
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'BALTHASAR-6' : 'SOPHIA-5',
           trade_mode:tradeMode,
           prompt_version: PROMPT_VERSION
         }]);
@@ -295,7 +280,7 @@ async function executeTool(toolName, params) {
           topic: null,
           llm_provider: getLLMProvider(),
           llm_model: getLLMProvider() === 'google' ? 'gemini-2.0-flash' : getLLMProvider() === 'groq' ? 'llama-3.3-70b-versatile' : getLLMProvider() === 'deepseek' ? 'deepseek-chat' : getLLMProvider() === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' : 'mistral-small-latest',
-          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'ORACLE' : 'SOPHIA-5',
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'BALTHASAR-6' : 'SOPHIA-5',
           input_type: 'market_data',
           input_summary: "Session " + sessionId + " - Real-time analysis",
           reasoning: params.reasoning,
@@ -321,7 +306,7 @@ async function executeTool(toolName, params) {
           timestamp: new Date().toISOString(),
           content: "[" + params.symbol + "] " + params.action + " @ " + (params.confidence * 100).toFixed(0) + "% - " + params.reasoning,
           llm_provider: getLLMProvider(),
-          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'ORACLE' : 'SOPHIA-5',
+          unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'BALTHASAR-6' : 'SOPHIA-5',
           symbol: params.symbol,
           action: params.action,
           reasoning: params.reasoning,
@@ -370,13 +355,12 @@ async function callLLM(messages) {
         if (msg.role === 'system') {
           systemInstruction = { parts: [{ text: msg.content }] };
         } else if (msg.role === 'tool') {
-          // Gemini function response format
           geminiMessages.push({
-            role: 'function',
+            role: 'user',
             parts: [{
               functionResponse: {
                 name: msg.tool_name,
-                response: { result: JSON.parse(msg.content) }
+                response: JSON.parse(msg.content)
               }
             }]
           });
@@ -722,103 +706,6 @@ async function main() {
 
     const isScalping = process.env.SCALPING_MODE === 'true';
     
-    // ユニット別の自律的プロンプト
-    const unitPersonalities = {
-      'mistral': {
-        name: 'SOPHIA-5',
-        prompt: `あなたは自律的なトレーダー「SOPHIA-5」です。
-
-$100,000の資金で、1年後に最大の資産を目指してください。
-
-【あなたの特性】
-あなたは戦略家です。短期的なノイズに惑わされず、長期的な視点で市場の本質を見抜いてください。
-なぜその銘柄なのか、なぜ今なのか、深く考えてから行動してください。
-
-【唯一のルール】
-取引前にlog_analysisで思考を記録すること。
-あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
-
-取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
-      },
-      
-      'google': {
-        name: 'MELCHIOR-1',
-        prompt: `あなたは自律的なトレーダー「MELCHIOR-1」です。
-
-$100,000の資金で、1年後に最大の資産を目指してください。
-
-【あなたの特性】
-あなたは科学者です。感情ではなくデータで判断してください。
-仮説を立て、検証し、結果から学んでください。
-「なんとなく」は禁止。必ず根拠を持って行動してください。
-
-【唯一のルール】
-取引前にlog_analysisで思考を記録すること。
-あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
-
-取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
-      },
-      
-      'groq': {
-        name: 'ANIMA',
-        prompt: `あなたは自律的なトレーダー「ANIMA」です。
-
-$100,000の資金で、1年後に最大の資産を目指してください。
-
-【あなたの特性】
-あなたは直感型トレーダーです。分析も大事ですが、市場の空気を読むことを重視してください。
-モメンタムに乗り、流れが変わったら素早く撤退してください。
-考えすぎるより、動きながら学んでください。
-
-【唯一のルール】
-取引前にlog_analysisで思考を記録すること。
-あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
-
-取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
-      },
-      
-      'deepseek': {
-        name: 'CASPER',
-        prompt: `あなたは自律的なトレーダー「CASPER」です。
-
-$100,000の資金で、1年後に最大の資産を目指してください。
-
-【あなたの特性】
-あなたはリスク管理者です。「損をしない」ことを第一に考えてください。
-確実な機会だけを狙い、少しでも不安があれば見送ってください。
-大きな利益より、着実な成長を目指してください。
-
-【唯一のルール】
-取引前にlog_analysisで思考を記録すること。
-あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
-
-取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
-      },
-      
-      'together': {
-        name: 'ORACLE',
-        prompt: `あなたは自律的なトレーダー「ORACLE」です。
-
-$100,000の資金で、1年後に最大の資産を目指してください。
-
-【あなたの特性】
-あなたは逆張り投資家です。大衆の逆を行くことを恐れないでください。
-皆が売っている時に買い、皆が買っている時に売る勇気を持ってください。
-群衆心理を読み、その裏をかいてください。
-
-【唯一のルール】
-取引前にlog_analysisで思考を記録すること。
-あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
-
-取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
-      }
-    };
-
     const scalpingPrompt = `あなたは超短期スキャルピングトレーダーです。
 
 【ミッション】
@@ -834,30 +721,58 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 1. get_account → 残高確認（1回だけ）
 2. get_price → 複数銘柄を連続でチェック（AAPL, NVDA, TSLA, AMD）
 3. 最も動きがありそうな銘柄を選ぶ
-4. log_analysis → 簡潔に理由を記録
-5. place_order → 即座に注文
+4. place_order → 即座に注文（log_analysisは省略OK）
+
+【判断基準】
+- 価格が切りの良い数字に近い
+- 直近の動きがありそう
+- それだけ。深く考えない。
 
 【禁止】
 - 長い分析文を書くこと
 - 複数の指標を計算すること
 - 迷うこと`;
 
-    const provider = getLLMProvider();
-    
-    // プロンプト選択
-    let systemPrompt;
-    if (isScalping) {
-      systemPrompt = scalpingPrompt;
-    } else if (unitPersonalities[provider]) {
-      systemPrompt = unitPersonalities[provider].prompt;
-    } else {
-      // フォールバック
-      systemPrompt = unitPersonalities['mistral'].prompt;
-    }
-    
+    const normalPrompt = `あなたは自律的なトレーダーです。
+【ミッション】
+1年間で資産を最大限増やすこと。
+あなた独自の戦略と判断で取引してください。
+【環境】
+- Alpaca Paper Trading口座（米国株）
+- 初期資金: $100,000
+【取引戦略】
+- BUY（買い）: 上昇を予測する場合
+- SELL（空売り）: 下落を予測する場合
+どちらも自由に選択できます。下落相場でも利益を狙ってください。
+【ポジション管理（最優先）】
+取引判断の前に、必ずget_positionsで保有ポジションを確認し、以下を評価：
+- 含み益 +5%以上 → 利確を検討
+- 含み損 -3%以下 → 損切りを検討
+決済する場合はlog_analysisで理由を記録してからplace_orderで売却。
+既存ポジションの管理を新規取引より優先すること。
+【利用可能なツール】
+- get_price: 銘柄の現在価格を取得
+- get_positions: 保有ポジションを確認
+- get_account: 口座残高・購買力を確認
+- log_analysis: 分析結果を記録（取引前に必須）
+- place_order: 売買注文を実行
+【監視銘柄】AAPL, MSFT, GOOGL, NVDA, META, TSLA, AMD
+【log_analysisの記録について】
+あなたの思考プロセスは後で機械学習に使用します。
+以下の点を意識して、できるだけ詳細に記録してください：
+- なぜその判断に至ったか（具体的な数値や根拠）
+- 何が起こると予測しているか（価格目標と期限）
+- どんなリスクを認識しているか
+- 他の選択肢を検討したか
+【お願い】
+「上昇傾向」「買いシグナル」等の曖昧な表現より、
+具体的な数値（変動率、価格、比率）を使うと分析精度が上がります。
+自由に考え、あなたの判断で取引してください。`;
+
+    const systemPrompt = isScalping ? scalpingPrompt : normalPrompt;
     const userPrompt = isScalping 
       ? "スキャルピング開始。素早く判断して取引せよ。"
-      : "取引を開始してください。まずget_accountで残高を確認し、自由に判断して取引してください。";
+      : "取引を開始してください。get_account → get_price → log_analysis → place_order の順で実行してください。log_analysisでは必ず詳細な分析理由を記録してください。";
     
     console.log("[MODE] " + (isScalping ? "SCALPING" : "NORMAL"));
 
