@@ -1,83 +1,167 @@
+
 name: Deploy to Cloud Run
 
 on:
+
   push:
+
     branches: [main]
 
 env:
+
   PROJECT_ID: screen-share-459802
+
   REGION: asia-northeast1
 
 jobs:
+
   deploy:
+
     runs-on: ubuntu-latest
+
     
+
     permissions:
+
       contents: read
+
       id-token: write
 
     steps:
+
       - name: Checkout code
+
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
+
         uses: google-github-actions/auth@v2
+
         with:
+
           workload_identity_provider: 'projects/398890937507/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+
           service_account: 'github-actions@screen-share-459802.iam.gserviceaccount.com'
 
       - name: Set up Cloud SDK
+
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Deploy magi-core-job (Mistral/SOPHIA-5)
+
         run: |
+
           gcloud run jobs deploy magi-core-job \
+
             --source=. \
+
             --region=${{ env.REGION }} \
+
             --set-env-vars="LLM_PROVIDER=mistral" \
-            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,MISTRAL_API_KEY=MISTRAL_API_KEY:latest" \
+
+            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,MISTRAL_API_KEY=MISTRAL_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=TELEGRAM_CHAT_ID:latest" \
+
             --memory=512Mi \
+
             --task-timeout=5m \
+
             --max-retries=0 \
+
             --project=${{ env.PROJECT_ID }}
 
       - name: Deploy magi-core-gemini (Gemini/MELCHIOR-1)
+
         run: |
+
           gcloud run jobs deploy magi-core-gemini \
+
             --source=. \
+
             --region=${{ env.REGION }} \
+
             --set-env-vars="LLM_PROVIDER=google" \
-            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest" \
+
+            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=TELEGRAM_CHAT_ID:latest" \
+
             --memory=512Mi \
+
             --task-timeout=5m \
+
             --max-retries=0 \
+
             --project=${{ env.PROJECT_ID }}
 
       - name: Deploy magi-core-groq (Groq/ANIMA)
+
         run: |
+
           gcloud run jobs deploy magi-core-groq \
+
             --source=. \
+
             --region=${{ env.REGION }} \
+
             --set-env-vars="LLM_PROVIDER=groq" \
-            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest" \
+
+            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=TELEGRAM_CHAT_ID:latest" \
+
             --memory=512Mi \
+
             --task-timeout=5m \
+
             --max-retries=0 \
+
             --project=${{ env.PROJECT_ID }}
 
       - name: Deploy magi-core-deepseek (DeepSeek/CASPER)
+
         run: |
+
           gcloud run jobs deploy magi-core-deepseek \
+
             --source=. \
+
             --region=${{ env.REGION }} \
+
             --set-env-vars="LLM_PROVIDER=deepseek" \
-            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest" \
+
+            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=TELEGRAM_CHAT_ID:latest" \
+
             --memory=512Mi \
+
             --task-timeout=5m \
+
             --max-retries=0 \
+
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Deploy magi-core-together-scalping (Together/ORACLE)
+
+        run: |
+
+          gcloud run jobs deploy magi-core-together-scalping \
+
+            --source=. \
+
+            --region=${{ env.REGION }} \
+
+            --set-env-vars="LLM_PROVIDER=together,SCALPING_MODE=true" \
+
+            --set-secrets="ALPACA_API_KEY=ALPACA_API_KEY:latest,ALPACA_SECRET_KEY=ALPACA_SECRET_KEY:latest,TOGETHER_API_KEY=TOGETHER_API_KEY:latest,TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=TELEGRAM_CHAT_ID:latest" \
+
+            --memory=512Mi \
+
+            --task-timeout=5m \
+
+            --max-retries=0 \
+
             --project=${{ env.PROJECT_ID }}
 
       - name: Deploy Summary
+
         run: |
+
           echo "✅ All MAGI Core jobs deployed successfully!"
-          echo "Jobs: magi-core-job, magi-core-gemini, magi-core-groq, magi-core-deepseek"
+
+          echo "Jobs: magi-core-job, magi-core-gemini, magi-core-groq, magi-core-deepseek, magi-core-together-scalping"
+
