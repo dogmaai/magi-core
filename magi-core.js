@@ -66,6 +66,49 @@ let sessionId = null;
 let startingEquity = null;
 let tradeMode = null;
 
+
+// ISABELインサイト取得（参考情報としてLLMに提供）
+async function getIsabelInsights() {
+  try {
+    const query = `
+      WITH stats AS (
+        SELECT
+          COUNT(*) as total,
+          COUNTIF(result = 'WIN') as wins,
+          COUNTIF(result = 'LOSE') as losses,
+          ROUND(AVG(CASE WHEN result = 'WIN' THEN confidence END), 2) as win_avg_conf,
+          ROUND(AVG(CASE WHEN result = 'LOSE' THEN confidence END), 2) as lose_avg_conf,
+          ROUND(AVG(CASE WHEN result = 'WIN' THEN return_pct END), 1) as win_avg_return
+        FROM magi_core.isabel_analysis
+        WHERE result IS NOT NULL
+      )
+      SELECT * FROM stats WHERE total >= 10
+    `;
+    const [rows] = await bigquery.query({ query });
+    if (!rows || rows.length === 0) return null;
+    
+    const s = rows[0];
+    const winRate = Math.round(s.wins * 100 / s.total);
+    
+    let insight = `【ISABELからの参考情報】
+過去${s.total}件の取引分析から観察されたパターン：
+・勝率: ${winRate}%（${s.wins}勝${s.losses}敗）
+・WIN時の平均confidence: ${s.win_avg_conf}
+・LOSE時の平均confidence: ${s.lose_avg_conf}`;
+    
+    if (s.lose_avg_conf > s.win_avg_conf) {
+      insight += `\n→ 過度に高いconfidenceは過信の可能性あり`;
+    }
+    insight += `\n・WIN時の平均リターン: +${s.win_avg_return}%`;
+    insight += `\n\nこれは参考情報です。あなたの自由な判断を制限するものではありません。`;
+    
+    return insight;
+  } catch (e) {
+    console.log('[ISABEL] Insights取得スキップ:', e.message);
+    return null;
+  }
+}
+
 async function safeInsert(tableName, rows, useAnalytics = false) {
   const maxRetries = 3;
   let attempt = 0;
@@ -855,6 +898,16 @@ $100,000の資金で、1年後に最大の資産を目指してください。
       systemPrompt = unitPersonalities['mistral'].prompt;
     }
     
+
+    // ISABELインサイトをプロンプトに追加（スキャルピング以外）
+    if (!isScalping) {
+      const isabelInsights = await getIsabelInsights();
+      if (isabelInsights) {
+        systemPrompt += '\n\n' + isabelInsights;
+        console.log('[ISABEL] インサイトをプロンプトに追加');
+      }
+    }
+
     const userPrompt = isScalping 
       ? "スキャルピング開始。素早く判断して取引せよ。"
       : "取引を開始してください。まずget_accountで残高を確認し、自由に判断して取引してください。";
