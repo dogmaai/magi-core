@@ -225,7 +225,9 @@ async function executeTool(toolName, params) {
           { headers: alpacaHeaders }
         );
         const priceData = await priceResponse.json();
-        return { symbol: params.symbol, price: priceData.quote?.ap || 0 };
+        // Use ask price, fallback to bid price if ask is 0
+        const price = priceData.quote?.ap || priceData.quote?.bp || 0;
+        return { symbol: params.symbol, price: price };
 
       case "get_account":
         const accountResponse = await fetch(
