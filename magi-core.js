@@ -890,7 +890,8 @@ Brief logs like "going up" are USELESS for analysis.
 
 【FLOW】
 1. get_account → Check balance (once)
-2. get_price → Scan multiple symbols
+2. get_price → Call ONE symbol at a time (e.g., get_price("AAPL"), then get_price("NVDA"), etc.)
+   DO NOT pass multiple symbols at once. Call get_price separately for each symbol.
 3. Select the symbol with the best momentum
 4. log_analysis → Record detailed reasoning in English (REQUIRED)
 5. place_order → Execute trade
