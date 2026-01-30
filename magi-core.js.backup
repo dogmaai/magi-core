@@ -225,9 +225,7 @@ async function executeTool(toolName, params) {
           { headers: alpacaHeaders }
         );
         const priceData = await priceResponse.json();
-        // Use ask price, fallback to bid price if ask is 0
-        const price = priceData.quote?.ap || priceData.quote?.bp || 0;
-        return { symbol: params.symbol, price: price };
+        return { symbol: params.symbol, price: priceData.quote?.ap || 0 };
 
       case "get_account":
         const accountResponse = await fetch(
@@ -321,29 +319,6 @@ async function executeTool(toolName, params) {
         return orderResult; 
 
       case "log_analysis":
-        // フォールバック: symbolがない場合、reasoningから抽出
-        const KNOWN_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'IONQ'];
-        if (!params.symbol && params.reasoning) {
-          for (const sym of KNOWN_SYMBOLS) {
-            if (params.reasoning.toUpperCase().includes(sym)) {
-              params.symbol = sym;
-              console.log("[FALLBACK] Extracted symbol from reasoning: " + sym);
-              break;
-            }
-          }
-        }
-        // フォールバック: actionがない場合、reasoningから推測
-        if (!params.action && params.reasoning) {
-          const reasoningLower = params.reasoning.toLowerCase();
-          if (reasoningLower.includes('buy') || reasoningLower.includes('long') || reasoningLower.includes('購入')) {
-            params.action = 'BUY';
-          } else if (reasoningLower.includes('sell') || reasoningLower.includes('short') || reasoningLower.includes('売却')) {
-            params.action = 'SELL';
-          } else {
-            params.action = 'HOLD';
-          }
-          console.log("[FALLBACK] Inferred action from reasoning: " + params.action);
-        }
         let currentPrice = null;
         try {
           const priceRes = await fetch(
@@ -887,41 +862,28 @@ $100,000の資金で、1年後に最大の資産を目指してください。
       }
     };
 
-    const scalpingPrompt = `You are an autonomous scalping trader "ORACLE".
+    const scalpingPrompt = `あなたは超短期スキャルピングトレーダーです。
 
-**IMPORTANT: You MUST respond and write ALL outputs in English only. Do not use any other language.**
+【ミッション】
+素早く小さな利益を積み重ねる。深い分析より速度重視。
 
-【MISSION】
-Accumulate small profits quickly through short-term trades. Always record your reasoning in detail.
+【ルール】
+- 考えすぎない。直感で判断
+- 1回の取引は$50以下
+- 理由は一言でOK（例：「上昇中」「出来高増」）
+- 複数銘柄を素早くチェックして、動きのある銘柄を狙う
 
-【YOUR PERSONALITY】
-You are a contrarian investor. Don't fear going against the crowd.
-Find opportunities to exploit crowd psychology even in short-term movements.
+【フロー】
+1. get_account → 残高確認（1回だけ）
+2. get_price → 複数銘柄を連続でチェック（AAPL, NVDA, TSLA, AMD, MSFT, GOOGL, META, AMZN, CRM, ADBE, IONQ, RGTI, QBTS, JPM, BAC, GS, V, MA, UNH, JNJ, PFE, ABBV, LLY, WMT, COST, HD, MCD, SBUX, XOM, CVX, COP, SPY, QQQ, IWM）
+3. 最も動きがありそうな銘柄を選ぶ
+4. log_analysis → 簡潔に理由を記録
+5. place_order → 即座に注文
 
-【TRADING RULES】
-- Maximum $50 per trade
-- Quickly scan multiple symbols for momentum
-- Target symbols: AAPL, NVDA, TSLA, AMD, MSFT, GOOGL, META, AMZN, CRM, ADBE, IONQ, RGTI, QBTS, JPM, BAC, GS, V, MA, UNH, JNJ, PFE, ABBV, LLY, WMT, COST, HD, MCD, SBUX, XOM, CVX, COP, SPY, QQQ, IWM
-
-【CRITICAL: THOUGHT LOGGING RULES】
-Before every trade, you MUST call log_analysis with:
-- reasoning: WHY you chose this symbol (price movement, volume, market sentiment - minimum 50 characters, IN ENGLISH)
-- hypothesis: What you predict will happen (specific price target or timeframe, IN ENGLISH)
-- confidence: Your confidence level (0.0-1.0)
-- concerns: Risks or concerns (IN ENGLISH)
-
-Your decision process will be analyzed later to discover winning algorithms.
-Brief logs like "going up" are USELESS for analysis.
-
-【FLOW】
-1. get_account → Check balance (once)
-2. get_price → Call ONE symbol at a time (e.g., get_price("AAPL"), then get_price("NVDA"), etc.)
-   DO NOT pass multiple symbols at once. Call get_price separately for each symbol.
-3. Select the symbol with the best momentum
-4. log_analysis → Record detailed reasoning in English (REQUIRED)
-5. place_order → Execute trade
-
-Available tools: get_account, get_price, get_positions, log_analysis, place_order`;
+【禁止】
+- 長い分析文を書くこと
+- 複数の指標を計算すること
+- 迷うこと`;
 
     const provider = getLLMProvider();
     

@@ -321,29 +321,6 @@ async function executeTool(toolName, params) {
         return orderResult; 
 
       case "log_analysis":
-        // フォールバック: symbolがない場合、reasoningから抽出
-        const KNOWN_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'IONQ'];
-        if (!params.symbol && params.reasoning) {
-          for (const sym of KNOWN_SYMBOLS) {
-            if (params.reasoning.toUpperCase().includes(sym)) {
-              params.symbol = sym;
-              console.log("[FALLBACK] Extracted symbol from reasoning: " + sym);
-              break;
-            }
-          }
-        }
-        // フォールバック: actionがない場合、reasoningから推測
-        if (!params.action && params.reasoning) {
-          const reasoningLower = params.reasoning.toLowerCase();
-          if (reasoningLower.includes('buy') || reasoningLower.includes('long') || reasoningLower.includes('購入')) {
-            params.action = 'BUY';
-          } else if (reasoningLower.includes('sell') || reasoningLower.includes('short') || reasoningLower.includes('売却')) {
-            params.action = 'SELL';
-          } else {
-            params.action = 'HOLD';
-          }
-          console.log("[FALLBACK] Inferred action from reasoning: " + params.action);
-        }
         let currentPrice = null;
         try {
           const priceRes = await fetch(
