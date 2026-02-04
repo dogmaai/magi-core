@@ -64,6 +64,88 @@ const dataset = bigquery.dataset('magi_core');
 const analyticsDataset = bigquery.dataset('magi_analytics');
 let sessionId = null;
 let startingEquity = null;
+// === ISABEL: Dynamic Stats from BigQuery ===
+let isabelStats = null;
+
+async function getIsabelStats() {
+  try {
+    console.log('[ISABEL] Fetching latest stats from BigQuery...');
+    const [dirRows] = await bigquery.query({ query: `
+      SELECT llm_provider, side,
+        COUNTIF(result = 'WIN') as wins,
+        COUNTIF(result = 'LOSE') as loses,
+        ROUND(SAFE_DIVIDE(COUNTIF(result = 'WIN'), COUNTIF(result = 'WIN') + COUNTIF(result = 'LOSE')) * 100, 1) as win_rate
+      FROM magi_core.trades
+      WHERE result IS NOT NULL AND side IS NOT NULL
+      GROUP BY llm_provider, side
+    ` });
+    const [symRows] = await bigquery.query({ query: `
+      SELECT symbol,
+        COUNTIF(result = 'WIN') as wins,
+        COUNTIF(result = 'LOSE') as loses,
+        ROUND(SAFE_DIVIDE(COUNTIF(result = 'WIN'), COUNTIF(result = 'WIN') + COUNTIF(result = 'LOSE')) * 100, 1) as win_rate
+      FROM magi_core.trades
+      WHERE result IS NOT NULL AND side IS NOT NULL
+      GROUP BY symbol
+      HAVING (COUNTIF(result = 'WIN') + COUNTIF(result = 'LOSE')) >= 2
+      ORDER BY win_rate DESC
+    ` });
+    const dirMap = {};
+    for (const r of dirRows) {
+      if (!dirMap[r.llm_provider]) dirMap[r.llm_provider] = {};
+      dirMap[r.llm_provider][r.side] = { wins: Number(r.wins), loses: Number(r.loses), win_rate: Number(r.win_rate) || 0 };
+    }
+    const symbols = symRows.map(r => ({ symbol: r.symbol, wins: Number(r.wins), loses: Number(r.loses), win_rate: Number(r.win_rate) || 0 }));
+    isabelStats = { directions: dirMap, symbols };
+    console.log('[ISABEL] Stats loaded:', JSON.stringify({ providers: Object.keys(dirMap), symbolCount: symbols.length }));
+    return isabelStats;
+  } catch (e) {
+    console.error('[ISABEL] Failed to load stats:', e.message);
+    return null;
+  }
+}
+
+function generateStrengthText(provider) {
+  if (!isabelStats) return 'Data collecting. Decide freely.';
+  const dir = isabelStats.directions[provider];
+  if (!dir) return 'Data collecting. Decide freely.';
+  const lines = [];
+  if (dir.buy) lines.push('BUY win rate: ' + dir.buy.win_rate + '% (' + dir.buy.wins + 'W ' + dir.buy.loses + 'L)');
+  if (dir.sell) lines.push('SELL win rate: ' + dir.sell.win_rate + '% (' + dir.sell.wins + 'W ' + dir.sell.loses + 'L)');
+  const buyRate = dir.buy ? dir.buy.win_rate : 0;
+  const sellRate = dir.sell ? dir.sell.win_rate : 0;
+  if (buyRate >= 70 && sellRate < 50) lines.push('-> You excel at BUY. Prioritize BUY. Be cautious with SELL.');
+  else if (sellRate >= 70 && buyRate < 50) lines.push('-> You excel at SELL. Prioritize SELL. Be cautious with BUY.');
+  else if (buyRate >= 70 && sellRate >= 70) lines.push('-> Strong at both BUY and SELL.');
+  if (dir.buy && dir.buy.win_rate <= 30 && dir.buy.loses >= 3) lines.push('WARNING: BUY win rate is ' + dir.buy.win_rate + '%. Avoid BUY.');
+  if (dir.sell && dir.sell.win_rate <= 30 && dir.sell.loses >= 3) lines.push('WARNING: SELL win rate is ' + dir.sell.win_rate + '%. Avoid SELL.');
+  return lines.join('\n');
+}
+
+function generateSymbolText() {
+  if (!isabelStats || !isabelStats.symbols.length) return 'Data collecting.';
+  const good = isabelStats.symbols.filter(s => s.win_rate >= 65);
+  const bad = isabelStats.symbols.filter(s => s.win_rate <= 30 && s.loses >= 2);
+  const mid = isabelStats.symbols.filter(s => s.win_rate > 30 && s.win_rate < 65);
+  const lines = [];
+  if (good.length) lines.push('High win rate: ' + good.map(s => s.symbol + '(' + s.win_rate + '%)').join(', '));
+  if (mid.length) lines.push('Caution: ' + mid.map(s => s.symbol + '(' + s.win_rate + '%)').join(', '));
+  if (bad.length) lines.push('Avoid: ' + bad.map(s => s.symbol + '(' + s.win_rate + '%) - DO NOT TRADE').join(', '));
+  return lines.join('\n');
+}
+
+function generateAvoidText(provider) {
+  if (!isabelStats) return '';
+  const lines = [];
+  const bad = isabelStats.symbols.filter(s => s.win_rate <= 20 && s.loses >= 2);
+  for (const s of bad) lines.push('- ' + s.symbol + ': win rate ' + s.win_rate + '%. Do not trade.');
+  const dir = isabelStats.directions[provider];
+  if (dir && dir.buy && dir.buy.win_rate <= 30 && dir.buy.loses >= 3) lines.push('- Your BUY decisions correlate with losses.');
+  if (dir && dir.sell && dir.sell.win_rate <= 30 && dir.sell.loses >= 3) lines.push('- Your SELL decisions correlate with losses.');
+  lines.push('- Never trade without data. Always reference get_price_history indicators.');
+  return lines.join('\n');
+}
+
 let tradeMode = null;
 
 
@@ -884,26 +966,18 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 あなたは戦略家です。短期的なノイズに惑わされず、長期的な視点で市場の本質を見抜いてください。
 なぜその銘柄なのか、なぜ今なのか、深く考えてから行動してください。
 
-【データから判明した強み】
-あなたはSELL（売り）判断で100%の勝率を記録しています。
-売りのタイミングを見極める能力を活かし、特にポジション解消の判断に自信を持ってください。
-BUYも可能ですが、売り時の見極めがあなたの最大の武器です。
-
-【銘柄選択の指針】
-過去データの勝率: META(89%), MSFT(100%), AAPL(68%), AMD(67%)
-TSLA(65%), NVDA(50%)は慎重に。GOOGL(0%)は取引禁止。
-
+【ISABELデータ分析（自動更新）】
+${generateStrengthText('mistral')}
+【銘柄選択の指針（自動更新）】
+${generateSymbolText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
 get_price_historyで過去20日の価格推移・SMA5/SMA20・RSI14・出来高を確認してから判断すること。
 勘や訓練データの記憶だけで判断してはいけない。データに基づいて判断すること。
-
-【注意: 避けるべきパターン】
-・GOOGL: 過去データで勝率0%。他の銘柄を優先してください。
+【注意: 避けるべきパターン（自動更新）】
+${generateAvoidText('mistral')}
 ・逆張り戦略は負けパターンと相関が高い。トレンドフォローを優先してください。
-・根拠が曖昧なまま取引しない。具体的な指標（RSI、移動平均、出来高）を必ず言及してください。
-
 【唯一のルール】
 取引前にlog_analysisで思考を記録すること。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
@@ -923,21 +997,18 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 仮説を立て、検証し、結果から学んでください。
 「なんとなく」は禁止。必ず根拠を持って行動してください。
 
-【データから判明した強み】
-あなたは75%の勝率を記録しています。データに基づいた慎重な判断を続けてください。
-特にMETA（勝率89%）、AAPL（68%）が好成績の銘柄です。
-
-【銘柄選択の指針】
-優先: META(89%), MSFT(100%), AAPL(68%)。NVDA(50%)は慎重に。GOOGL(0%)は禁止。
-
+【ISABELデータ分析（自動更新）】
+${generateStrengthText('google')}
+【銘柄選択の指針（自動更新）】
+${generateSymbolText()}
 【分析の質について】
-具体的数値を含む分析が勝率が高い。「上昇傾向」ではなく「直近5日+3.2%,出来高1.5倍」のように。
-
-【注意: 避けるべきパターン】
-・GOOGL: 過去データで勝率0%。他の銘柄を優先してください。
+長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
+【重要: 取引判断の前にget_price_historyを必ず使うこと】
+get_price_historyで過去20日の価格推移・SMA5/SMA20・RSI14・出来高を確認してから判断すること。
+勘や訓練データの記憶だけで判断してはいけない。データに基づいて判断すること。
+【注意: 避けるべきパターン（自動更新）】
+${generateAvoidText('google')}
 ・逆張り戦略は負けパターンと相関が高い。トレンドフォローを優先してください。
-・高いconfidenceが必ずしも勝ちに繋がらない。確信度より分析の具体性を重視してください。
-
 【唯一のルール】
 取引前にlog_analysisで思考を記録すること。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
@@ -957,23 +1028,18 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 モメンタムに乗り、流れが変わったら素早く撤退してください。
 考えすぎるより、動きながら学んでください。
 
-【データから判明した強み】
-あなたはBUY（買い）判断で100%の勝率を記録しています。
-買いのタイミングを捉える直感を信じてください。
-モメンタムに乗った買いがあなたの最大の武器です。SELL判断は慎重に。
-
-【銘柄選択の指針】
-BUY100%勝率を活かす銘柄: META(89%), MSFT(100%), AAPL(68%), AMD(67%)
-NVDA(50%)は慎重に。GOOGL(0%)は禁止。
-
+【ISABELデータ分析（自動更新）】
+${generateStrengthText('groq')}
+【銘柄選択の指針（自動更新）】
+${generateSymbolText()}
 【分析の質について】
-「上がりそう」ではなく「出来高急増+SMA20上抜け」のように具体的モメンタム指標を記載。
-
-【注意: 避けるべきパターン】
-・GOOGL: 過去データで勝率0%。他の銘柄を優先してください。
-・SELL判断は勝率0%（0勝3敗）。売りたい場合は見送りも検討してください。
-・逆張り戦略は負けパターンと相関が高い。モメンタムフォローを貫いてください。
-
+長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
+【重要: 取引判断の前にget_price_historyを必ず使うこと】
+get_price_historyで過去20日の価格推移・SMA5/SMA20・RSI14・出来高を確認してから判断すること。
+勘や訓練データの記憶だけで判断してはいけない。データに基づいて判断すること。
+【注意: 避けるべきパターン（自動更新）】
+${generateAvoidText('groq')}
+・逆張り戦略は負けパターンと相関が高い。トレンドフォローを優先してください。
 【唯一のルール】
 取引前にlog_analysisで思考を記録すること。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
@@ -998,20 +1064,18 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 BUY判断（勝率67%）に集中し、売り判断は極力避けてください。
 取引頻度を下げ、本当に確実な機会だけに絞ってください。
 
-【銘柄選択の指針】
-BUY(67%)に集中: META(89%), MSFT(100%), AAPL(68%)
-TSLA(65%)は慎重に。GOOGL(0%)とNVDA(50%)は禁止。
-
+【ISABELデータ分析（自動更新）】
+${generateStrengthText('deepseek')}
+【銘柄選択の指針（自動更新）】
+${generateSymbolText()}
 【分析の質について】
-不安なら見送り。取引時は「含み益X%で利確」「サポートY$割れで損切り」のように具体的に。
-
-【注意: 避けるべきパターン】
-・GOOGL: 過去データで勝率0%。絶対に取引しないでください。
-・NVDA: 勝率50%（コイントス同等）。確実性が低い場合は見送り。
-・SELL判断: 勝率17%（1勝5敗）。売り判断は極力避けてください。
-・逆張り戦略は負けパターンと相関が高い。トレンドに逆らわないでください。
-・高いconfidence（0.8以上）でもLOSEが多発。過信せず、根拠を再確認してください。
-
+長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
+【重要: 取引判断の前にget_price_historyを必ず使うこと】
+get_price_historyで過去20日の価格推移・SMA5/SMA20・RSI14・出来高を確認してから判断すること。
+勘や訓練データの記憶だけで判断してはいけない。データに基づいて判断すること。
+【注意: 避けるべきパターン（自動更新）】
+${generateAvoidText('deepseek')}
+・逆張り戦略は負けパターンと相関が高い。トレンドフォローを優先してください。
 【唯一のルール】
 取引前にlog_analysisで思考を記録すること。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
@@ -1041,17 +1105,18 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 ・BUY判断は原則として避けてください。どうしても買いたい場合は、少額に留めてください。
 ・トレンドに逆らうBUYは禁止。下落中の「底値買い」は過去全て失敗しています。
 
-【注意: 避けるべきパターン】
-・GOOGL: 過去データで勝率0%。取引しないでください。
-・逆張りBUY: 勝率0%（0勝12敗）。絶対に避けてください。
-・根拠の薄い取引: reasoning が50文字未満の取引は全て失敗しています。
-
-【銘柄選択の指針(SELL用)】
-SELL90%勝率を活かす: TSLA, AAPL, META優先。GOOGL(0%)は禁止。
-
+【ISABELデータ分析（自動更新）】
+${generateStrengthText('together')}
+【銘柄選択の指針（自動更新）】
+${generateSymbolText()}
 【分析の質について】
-50文字未満は全敗。必ず含める: なぜ今売るか、目標価格/時間軸、リスク認識。
-
+長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
+【重要: 取引判断の前にget_price_historyを必ず使うこと】
+get_price_historyで過去20日の価格推移・SMA5/SMA20・RSI14・出来高を確認してから判断すること。
+勘や訓練データの記憶だけで判断してはいけない。データに基づいて判断すること。
+【注意: 避けるべきパターン（自動更新）】
+${generateAvoidText('together')}
+・逆張り戦略は負けパターンと相関が高い。トレンドフォローを優先してください。
 【唯一のルール】
 取引前にlog_analysisで思考を記録すること。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
