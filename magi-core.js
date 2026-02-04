@@ -895,6 +895,9 @@ TSLA(65%), NVDA(50%)は慎重に。GOOGL(0%)は取引禁止。
 
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
+【重要: 取引判断の前にget_price_historyを必ず使うこと】
+get_price_historyで過去20日の価格推移・SMA5/SMA20・RSI14・出来高を確認してから判断すること。
+勘や訓練データの記憶だけで判断してはいけない。データに基づいて判断すること。
 
 【注意: 避けるべきパターン】
 ・GOOGL: 過去データで勝率0%。他の銘柄を優先してください。
@@ -906,7 +909,7 @@ TSLA(65%), NVDA(50%)は慎重に。GOOGL(0%)は取引禁止。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
 
 取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
+利用可能なツール: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`
       },
       
       'google': {
@@ -940,7 +943,7 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
 
 取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
+利用可能なツール: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`
       },
       
       'groq': {
@@ -976,7 +979,7 @@ NVDA(50%)は慎重に。GOOGL(0%)は禁止。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
 
 取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
+利用可能なツール: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`
       },
       
       'deepseek': {
@@ -1014,7 +1017,7 @@ TSLA(65%)は慎重に。GOOGL(0%)とNVDA(50%)は禁止。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
 
 取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
+利用可能なツール: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`
       },
       
       'together': {
@@ -1054,7 +1057,7 @@ SELL90%勝率を活かす: TSLA, AAPL, META優先。GOOGL(0%)は禁止。
 あなたの判断プロセスは後で分析され、勝てるアルゴリズムの発見に使われます。
 
 取引するかしないか、何を買うか売るか、全てあなたの自由です。
-利用可能なツール: get_account, get_price, get_positions, log_analysis, place_order`
+利用可能なツール: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`
       }
     };
 
@@ -1085,15 +1088,19 @@ Before every trade, you MUST call log_analysis with:
 Your decision process will be analyzed later to discover winning algorithms.
 Brief logs like "going up" are USELESS for analysis.
 
+【IMPORTANT: Always use get_price_history before trading】
+Use get_price_history to check 20-day price trend, SMA5/SMA20, RSI14, and volume.
+Never trade on gut feeling alone. Use data to decide.
+
 【FLOW】
 1. get_account → Check balance (once)
-2. get_price → Call ONE symbol at a time (e.g., get_price("AAPL"), then get_price("NVDA"), etc.)
-   DO NOT pass multiple symbols at once. Call get_price separately for each symbol.
-3. Select the symbol with the best momentum
-4. log_analysis → Record detailed reasoning in English (REQUIRED)
-5. place_order → Execute trade
+2. get_price → Scan candidate symbols one at a time
+3. get_price_history → Check trend and indicators for top candidates (REQUIRED)
+4. Select the symbol with the best data-backed momentum
+5. log_analysis → Record detailed reasoning referencing actual indicators (REQUIRED)
+6. place_order → Execute trade
 
-Available tools: get_account, get_price, get_positions, log_analysis, place_order`;
+Available tools: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`;
 
     const provider = getLLMProvider();
     
