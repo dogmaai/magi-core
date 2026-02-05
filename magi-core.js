@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-const PROMPT_VERSION = "3.8";
+const PROMPT_VERSION = "3.9";
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -431,6 +431,128 @@ function generateRealtimeFeedbackText(provider) {
   }
   
   return lines.join('\n');
+}
+
+
+// === ISABEL Level 4: Cohere Embedding Analysis ===
+let isabelEmbeddings = null;
+
+async function getIsabelEmbeddings() {
+  try {
+    const cohereKey = process.env.COHERE_API_KEY;
+    if (!cohereKey) { console.log('[ISABEL] No Cohere API key'); return null; }
+    
+    console.log('[ISABEL] Loading embeddings analysis...');
+    
+    // 勝ち/負けのreasoningを取得
+    const [rows] = await bigquery.query({ query: `
+      SELECT t.result, th.reasoning
+      FROM magi_core.trades t
+      JOIN magi_core.thoughts th ON t.session_id = th.session_id AND t.symbol = th.symbol
+      WHERE t.result IN ('WIN', 'LOSE') AND th.reasoning IS NOT NULL AND LENGTH(th.reasoning) > 30
+      ORDER BY t.timestamp DESC LIMIT 50
+    ` });
+    
+    if (!rows || rows.length < 10) { console.log('[ISABEL] Not enough data for embeddings'); return null; }
+    
+    const winReasonings = rows.filter(r => r.result === 'WIN').map(r => r.reasoning).slice(0, 20);
+    const loseReasonings = rows.filter(r => r.result === 'LOSE').map(r => r.reasoning).slice(0, 20);
+    
+    if (winReasonings.length < 3 || loseReasonings.length < 3) {
+      console.log('[ISABEL] Not enough WIN/LOSE samples');
+      return null;
+    }
+    
+    // Cohere Embed APIでベクトル化
+    const embedResponse = await fetch('https://api.cohere.ai/v1/embed', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + cohereKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        texts: [...winReasonings, ...loseReasonings],
+        model: 'embed-multilingual-v3.0',
+        input_type: 'classification'
+      })
+    });
+    
+    if (!embedResponse.ok) {
+      console.log('[ISABEL] Cohere API error:', await embedResponse.text());
+      return null;
+    }
+    
+    const embedData = await embedResponse.json();
+    const embeddings = embedData.embeddings;
+    
+    // 勝ちと負けのcentroid（中心ベクトル）を計算
+    const winEmbeddings = embeddings.slice(0, winReasonings.length);
+    const loseEmbeddings = embeddings.slice(winReasonings.length);
+    
+    const winCentroid = computeCentroid(winEmbeddings);
+    const loseCentroid = computeCentroid(loseEmbeddings);
+    
+    isabelEmbeddings = { winCentroid, loseCentroid, winCount: winReasonings.length, loseCount: loseReasonings.length };
+    console.log('[ISABEL] Embeddings computed:', JSON.stringify({ win: winReasonings.length, lose: loseReasonings.length }));
+    
+    return isabelEmbeddings;
+  } catch (e) {
+    console.error('[ISABEL] Embeddings error:', e.message);
+    return null;
+  }
+}
+
+function computeCentroid(vectors) {
+  if (!vectors || vectors.length === 0) return null;
+  const dim = vectors[0].length;
+  const centroid = new Array(dim).fill(0);
+  for (const vec of vectors) {
+    for (let i = 0; i < dim; i++) centroid[i] += vec[i];
+  }
+  for (let i = 0; i < dim; i++) centroid[i] /= vectors.length;
+  return centroid;
+}
+
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// 新しいreasoningの勝率予測（将来のリアルタイム予測用）
+async function predictWinProbability(reasoning) {
+  if (!isabelEmbeddings || !process.env.COHERE_API_KEY) return null;
+  
+  try {
+    const embedResponse = await fetch('https://api.cohere.ai/v1/embed', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + process.env.COHERE_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: [reasoning], model: 'embed-multilingual-v3.0', input_type: 'classification' })
+    });
+    
+    if (!embedResponse.ok) return null;
+    const embedData = await embedResponse.json();
+    const vec = embedData.embeddings[0];
+    
+    const winSim = cosineSimilarity(vec, isabelEmbeddings.winCentroid);
+    const loseSim = cosineSimilarity(vec, isabelEmbeddings.loseCentroid);
+    
+    // 勝ちクラスタとの類似度が高いほど勝率予測が高い
+    const winProb = Math.round(winSim / (winSim + loseSim) * 100);
+    return { winProb, winSim: winSim.toFixed(3), loseSim: loseSim.toFixed(3) };
+  } catch (e) {
+    return null;
+  }
+}
+
+function generateEmbeddingsText() {
+  if (!isabelEmbeddings) return '';
+  return `【Semantic Analysis (Cohere Embeddings)】
+WIN cluster: ${isabelEmbeddings.winCount} samples analyzed
+LOSE cluster: ${isabelEmbeddings.loseCount} samples analyzed
+Your reasoning will be compared semantically to past WIN/LOSE patterns.`;
 }
 
 async function getIsabelInsights() {
@@ -1238,6 +1360,7 @@ async function main() {
     await getIsabelPatterns();
     await getIsabelQuality();
     await getRealtimeFeedback(getLLMProvider());
+    await getIsabelEmbeddings();
 
     const isScalping = process.env.SCALPING_MODE === 'true';
     
@@ -1260,6 +1383,7 @@ ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
 ${generateRealtimeFeedbackText(getLLMProvider())}
+${generateEmbeddingsText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1294,6 +1418,7 @@ ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
 ${generateRealtimeFeedbackText(getLLMProvider())}
+${generateEmbeddingsText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1328,6 +1453,7 @@ ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
 ${generateRealtimeFeedbackText(getLLMProvider())}
+${generateEmbeddingsText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1367,6 +1493,7 @@ ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
 ${generateRealtimeFeedbackText(getLLMProvider())}
+${generateEmbeddingsText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1411,6 +1538,7 @@ ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
 ${generateRealtimeFeedbackText(getLLMProvider())}
+${generateEmbeddingsText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
