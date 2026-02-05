@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-const PROMPT_VERSION = "4.0";
+const PROMPT_VERSION = "4.1";
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -418,6 +418,69 @@ function generateVolumeSpikeText(priceHistoryResult) {
 Volume: ${spike.volumeRatio}x average (${spike.strength})
 Direction: ${spike.direction} (${spike.priceChange}%)
 Signal: ${spike.suggestion}`;
+}
+
+
+// === Momentum Detection (Trend Surfer) ===
+function detectMomentum(change1d, change5d, rsi14, sma5, sma20, symbol) {
+  const daily = parseFloat(change1d) || 0;
+  const weekly = parseFloat(change5d) || 0;
+  const rsi = parseFloat(rsi14) || 50;
+  
+  let signals = [];
+  let strength = 0;
+  
+  // 1日で2%以上の動き = 強いモメンタム
+  if (Math.abs(daily) >= 2.0) {
+    const direction = daily > 0 ? 'UP' : 'DOWN';
+    signals.push(`Strong daily move: ${daily > 0 ? '+' : ''}${daily}%`);
+    strength += 2;
+  }
+  
+  // 5日で5%以上の動き = トレンド形成
+  if (Math.abs(weekly) >= 5.0) {
+    signals.push(`Weekly trend: ${weekly > 0 ? '+' : ''}${weekly}%`);
+    strength += 1;
+  }
+  
+  // RSIが極端 = オーバーボート/オーバーソールド
+  if (rsi >= 70) {
+    signals.push(`Overbought RSI: ${rsi}`);
+    strength += 1;
+  } else if (rsi <= 30) {
+    signals.push(`Oversold RSI: ${rsi}`);
+    strength += 1;
+  }
+  
+  // SMAクロス確認
+  if (sma5 && sma20) {
+    const s5 = parseFloat(sma5);
+    const s20 = parseFloat(sma20);
+    const crossStrength = ((s5 - s20) / s20 * 100).toFixed(2);
+    if (Math.abs(crossStrength) >= 2) {
+      signals.push(`SMA divergence: ${crossStrength}%`);
+      strength += 1;
+    }
+  }
+  
+  if (signals.length === 0) return null;
+  
+  const direction = daily >= 0 ? 'BULLISH' : 'BEARISH';
+  const suggestion = direction === 'BULLISH' && rsi < 70 ? 'Consider BUY - momentum building' :
+                     direction === 'BEARISH' && rsi > 30 ? 'Consider SELL - downward momentum' :
+                     'Caution - possible reversal zone';
+  
+  const result = {
+    type: 'MOMENTUM',
+    symbol,
+    direction,
+    strength: strength >= 4 ? 'EXTREME' : strength >= 3 ? 'STRONG' : 'MODERATE',
+    signals,
+    suggestion
+  };
+  
+  console.log('[MOMENTUM] Detected:', JSON.stringify(result));
+  return result;
 }
 
 // === ISABEL: Real-time Feedback for LLMs ===
@@ -887,7 +950,8 @@ async function executeTool(toolName, params) {
           },
           recent_bars: recentBars,
           trend: sma5 && sma20 ? (sma5 > sma20 ? "BULLISH (SMA5 > SMA20)" : "BEARISH (SMA5 < SMA20)") : "INSUFFICIENT DATA",
-          whale_alert: detectVolumeSpike(volumeRatio, change1d, params.symbol)
+          whale_alert: detectVolumeSpike(volumeRatio, change1d, params.symbol),
+          momentum_alert: detectMomentum(change1d, change5d, rsi14, sma5, sma20, params.symbol)
         };
 
 
