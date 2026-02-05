@@ -1141,7 +1141,7 @@ Find opportunities to exploit crowd psychology even in short-term movements.
 - Maximum $50 per trade
 - Quickly scan multiple symbols for momentum
 - Target symbols (priority order): META, AAPL, MSFT, AMD, TSLA, AMZN, CRM, ADBE, IONQ, RGTI, QBTS, JPM, BAC, GS, V, MA, UNH, JNJ, PFE, ABBV, LLY, WMT, COST, HD, MCD, SBUX, XOM, CVX, COP, SPY, QQQ, IWM, NVDA
-- AVOID: GOOGL (0% win rate in historical data)
+- NOTE: GOOGL previously avoided, now enabled for testing
 
 【CRITICAL: THOUGHT LOGGING RULES】
 Before every trade, you MUST call log_analysis with:
