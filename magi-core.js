@@ -378,46 +378,6 @@ Volume: ${spike.volumeRatio}x average (${spike.strength})
 Direction: ${spike.direction} (${spike.priceChange}%)
 Signal: ${spike.suggestion}`;
 }
-
-
-// === Volume Spike Detection (Algo Whale Detector) ===
-function detectVolumeSpike(volumeRatio, change1d, symbol) {
-  const ratio = parseFloat(volumeRatio);
-  const priceChange = parseFloat(change1d);
-  
-  if (ratio >= 3.0) {
-    // 出来高が平均の3倍以上 = 大口の動き
-    const direction = priceChange > 0 ? 'BULLISH' : priceChange < 0 ? 'BEARISH' : 'NEUTRAL';
-    const signal = {
-      type: 'VOLUME_SPIKE',
-      symbol,
-      volumeRatio: ratio,
-      priceChange,
-      direction,
-      strength: ratio >= 5.0 ? 'EXTREME' : ratio >= 4.0 ? 'STRONG' : 'MODERATE',
-      suggestion: direction === 'BULLISH' ? 'Consider BUY - large buyers detected' :
-                  direction === 'BEARISH' ? 'Consider SELL - large sellers detected' :
-                  'Watch closely - unusual activity'
-    };
-    console.log('[WHALE] Volume spike detected:', JSON.stringify(signal));
-    return signal;
-  }
-  return null;
-}
-
-function generateVolumeSpikeText(priceHistoryResult) {
-  if (!priceHistoryResult || !priceHistoryResult.indicators) return '';
-  
-  const { volume_ratio, change_1d } = priceHistoryResult.indicators;
-  const spike = detectVolumeSpike(volume_ratio, change_1d, priceHistoryResult.symbol);
-  
-  if (!spike) return '';
-  
-  return `
-【🐋 WHALE ALERT: ${spike.symbol}】
-Volume: ${spike.volumeRatio}x average (${spike.strength})
-Direction: ${spike.direction} (${spike.priceChange}%)
-Signal: ${spike.suggestion}`;
 }
 
 
