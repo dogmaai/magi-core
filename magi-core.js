@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-const PROMPT_VERSION = "3.5";
+const PROMPT_VERSION = "3.6";
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -103,6 +103,66 @@ async function getIsabelStats() {
     console.error('[ISABEL] Failed to load stats:', e.message);
     return null;
   }
+}
+
+
+// === ISABEL: Thought Pattern Analysis ===
+let isabelPatterns = null;
+
+async function getIsabelPatterns() {
+  try {
+    console.log('[ISABEL] Analyzing thought patterns...');
+    const [rows] = await bigquery.query({ query: `
+      SELECT t.result, th.reasoning, th.confidence
+      FROM magi_core.trades t
+      JOIN magi_core.thoughts th ON t.session_id = th.session_id AND t.symbol = th.symbol
+      WHERE t.result IN ('WIN', 'LOSE') AND th.reasoning IS NOT NULL AND LENGTH(th.reasoning) > 10
+    ` });
+    if (!rows || rows.length < 10) { console.log('[ISABEL] Not enough data'); return null; }
+    const winKeywords = {}, loseKeywords = {};
+    const keywordList = ['momentum', 'upward', 'downward', 'trend', 'bullish', 'bearish', 'support', 'resistance', 'breakout', 'pullback', 'bounce', 'contrarian', 'reversal', 'oversold', 'overbought', 'RSI', 'SMA', 'volume', 'strong', 'weak', 'growth', 'decline', 'potential', 'risk', 'caution'];
+    let winCount = 0, loseCount = 0;
+    for (const row of rows) {
+      const reasoning = (row.reasoning || '').toLowerCase();
+      const isWin = row.result === 'WIN';
+      if (isWin) winCount++; else loseCount++;
+      for (const kw of keywordList) {
+        if (reasoning.includes(kw.toLowerCase())) {
+          if (isWin) winKeywords[kw] = (winKeywords[kw] || 0) + 1;
+          else loseKeywords[kw] = (loseKeywords[kw] || 0) + 1;
+        }
+      }
+    }
+    const shortWins = rows.filter(r => r.result === 'WIN' && r.reasoning.length < 50).length;
+    const shortLoses = rows.filter(r => r.result === 'LOSE' && r.reasoning.length < 50).length;
+    const keywordWinRates = {};
+    for (const kw of keywordList) {
+      const w = winKeywords[kw] || 0, l = loseKeywords[kw] || 0;
+      if (w + l >= 3) keywordWinRates[kw] = { winRate: Math.round(w * 100 / (w + l)), wins: w, loses: l };
+    }
+    const winPatterns = Object.entries(keywordWinRates).filter(([k, v]) => v.winRate >= 65).sort((a, b) => b[1].winRate - a[1].winRate).slice(0, 5);
+    const losePatterns = Object.entries(keywordWinRates).filter(([k, v]) => v.winRate <= 40).sort((a, b) => a[1].winRate - b[1].winRate).slice(0, 5);
+    isabelPatterns = { winPatterns, losePatterns, shortAnalysisWinRate: shortWins + shortLoses > 0 ? Math.round(shortWins * 100 / (shortWins + shortLoses)) : null, totalWins: winCount, totalLoses: loseCount };
+    console.log('[ISABEL] Patterns:', JSON.stringify({ win: winPatterns.length, lose: losePatterns.length }));
+    return isabelPatterns;
+  } catch (e) { console.error('[ISABEL] Pattern error:', e.message); return null; }
+}
+
+function generatePatternText() {
+  if (!isabelPatterns) return '';
+  const lines = [];
+  if (isabelPatterns.winPatterns.length > 0) {
+    lines.push('【Winning Patterns】');
+    for (const [kw, s] of isabelPatterns.winPatterns) lines.push('- "' + kw + '" → ' + s.winRate + '% (' + s.wins + 'W/' + s.loses + 'L)');
+  }
+  if (isabelPatterns.losePatterns.length > 0) {
+    lines.push('【Losing Patterns - AVOID】');
+    for (const [kw, s] of isabelPatterns.losePatterns) lines.push('- "' + kw + '" → ' + s.winRate + '% (' + s.wins + 'W/' + s.loses + 'L) DANGER');
+  }
+  if (isabelPatterns.shortAnalysisWinRate !== null && isabelPatterns.shortAnalysisWinRate < 40) {
+    lines.push('【WARNING】Short analysis (<50 chars) = ' + isabelPatterns.shortAnalysisWinRate + '% win rate');
+  }
+  return lines.join('\n');
 }
 
 function generateStrengthText(provider) {
@@ -951,6 +1011,8 @@ async function main() {
 
   try {
     await startSession();
+    await getIsabelStats();
+    await getIsabelPatterns();
 
     const isScalping = process.env.SCALPING_MODE === 'true';
     
@@ -970,6 +1032,7 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 ${generateStrengthText('mistral')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
+${generatePatternText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1001,6 +1064,7 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 ${generateStrengthText('google')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
+${generatePatternText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1032,6 +1096,7 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 ${generateStrengthText('groq')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
+${generatePatternText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1068,6 +1133,7 @@ BUY判断（勝率67%）に集中し、売り判断は極力避けてくださ�
 ${generateStrengthText('deepseek')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
+${generatePatternText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1109,6 +1175,7 @@ $100,000の資金で、1年後に最大の資産を目指してください。
 ${generateStrengthText('together')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
+${generatePatternText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
