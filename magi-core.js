@@ -998,7 +998,7 @@ async function executeTool(toolName, params) {
 
       case "log_analysis":
         // フォールバック: symbolがない場合、reasoningから抽出
-        const KNOWN_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'IONQ'];
+        const KNOWN_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'IONQ', 'SPY', 'QQQ', 'KTOS', 'ONDS', 'SES'];
         if (!params.symbol && params.reasoning) {
           for (const sym of KNOWN_SYMBOLS) {
             if (params.reasoning.toUpperCase().includes(sym)) {
