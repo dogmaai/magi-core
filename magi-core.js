@@ -63,6 +63,7 @@ const bigquery = new BigQuery({ projectId: 'screen-share-459802' });
 const dataset = bigquery.dataset('magi_core');
 const analyticsDataset = bigquery.dataset('magi_analytics');
 let sessionId = null;
+let lastReasoning = null;  // ISABEL: 直前のreasoning保持
 let startingEquity = null;
 // === ISABEL: Dynamic Stats from BigQuery ===
 let isabelStats = null;
@@ -926,6 +927,18 @@ async function executeTool(toolName, params) {
           }));
           return { error: "Missing required parameters: symbol, side, qty" };
         }
+        // === ISABEL: 思考パターン類似度判定 ===
+        if (lastReasoning && isabelEmbeddings) {
+          const prediction = await predictWinProbability(lastReasoning);
+          if (prediction) {
+            console.log('[ISABEL] Pattern analysis:', JSON.stringify(prediction));
+            if (prediction.winProb < 40) {
+              console.warn('[ISABEL WARNING] This reasoning resembles LOSE patterns! winProb=' + prediction.winProb + '%');
+              // 将来的にはここでブロック可能:
+              // return { error: "ISABEL blocked: reasoning too similar to LOSE patterns", prediction };
+            }
+          }
+        }
         const orderResponse = await fetch(
           "https://paper-api.alpaca.markets/v2/orders",
           {
@@ -997,6 +1010,7 @@ async function executeTool(toolName, params) {
         return orderResult; 
 
       case "log_analysis":
+        lastReasoning = params.reasoning;  // ISABEL: 保存
         // フォールバック: symbolがない場合、reasoningから抽出
         const KNOWN_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'IONQ', 'SPY', 'QQQ', 'KTOS', 'ONDS', 'SES'];
         if (!params.symbol && params.reasoning) {
