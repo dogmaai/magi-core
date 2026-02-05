@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-const PROMPT_VERSION = "3.6";
+const PROMPT_VERSION = "3.7";
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -162,6 +162,133 @@ function generatePatternText() {
   if (isabelPatterns.shortAnalysisWinRate !== null && isabelPatterns.shortAnalysisWinRate < 40) {
     lines.push('【WARNING】Short analysis (<50 chars) = ' + isabelPatterns.shortAnalysisWinRate + '% win rate');
   }
+  return lines.join('\n');
+}
+
+
+// === ISABEL Level 3: Quality Structure Analysis ===
+let isabelQuality = null;
+
+function analyzeReasoningQuality(reasoning, hypothesis, confidence) {
+  const r = (reasoning || '').toLowerCase();
+  const h = (hypothesis || '').toLowerCase();
+  
+  const score = {
+    // 具体的なテクニカル指標の有無
+    hasIndicator: /rsi|sma|ema|macd|bollinger|moving average|移動平均/.test(r) ? 1 : 0,
+    // 数値データの有無（価格、%、倍率など）
+    hasNumericData: /\d+(\.\d+)?%|\$\d+|\d+x|\d+倍/.test(r) ? 1 : 0,
+    // 時間軸の明示
+    hasTimeframe: /short.?term|long.?term|1\s?(day|week|month)|日|週|月|hours?|分/.test(r) ? 1 : 0,
+    // 十分な長さ（100文字以上）
+    sufficientLength: reasoning && reasoning.length >= 100 ? 1 : 0,
+    // 仮説の有無と質
+    hasHypothesis: hypothesis && hypothesis.length >= 20 ? 1 : 0,
+    // 危険ワード（希望的観測）の不在
+    noHopefulWords: !/hope|wish|should reverse|due for|might bounce|maybe/.test(r) ? 1 : 0,
+    // 逆張りワードの不在
+    noContrarianWords: !/contrarian|against.?trend|底|天井/.test(r) ? 1 : 0,
+    // リスク認識の有無
+    hasRiskAwareness: /risk|caution|concern|注意|リスク|懸念/.test(r) ? 1 : 0,
+    // 具体的な価格目標/損切りの言及
+    hasPriceTarget: /target|stop.?loss|利確|損切|目標/.test(r) ? 1 : 0,
+    // トレンドフォローの言及
+    trendFollowing: /trend|momentum|upward|上昇|継続/.test(r) ? 1 : 0
+  };
+  
+  const total = Object.values(score).reduce((a, b) => a + b, 0);
+  return { score, total, maxScore: 10 };
+}
+
+async function getIsabelQuality() {
+  try {
+    console.log('[ISABEL] Analyzing reasoning quality...');
+    const [rows] = await bigquery.query({ query: `
+      SELECT t.result, th.reasoning, th.hypothesis, th.confidence
+      FROM magi_core.trades t
+      JOIN magi_core.thoughts th ON t.session_id = th.session_id AND t.symbol = th.symbol
+      WHERE t.result IN ('WIN', 'LOSE') AND th.reasoning IS NOT NULL AND LENGTH(th.reasoning) > 10
+    ` });
+    if (!rows || rows.length < 10) { console.log('[ISABEL] Not enough quality data'); return null; }
+    
+    // 各取引の品質スコアを計算
+    const qualityResults = { win: [], lose: [] };
+    const factorWinRates = {};
+    
+    for (const row of rows) {
+      const q = analyzeReasoningQuality(row.reasoning, row.hypothesis, row.confidence);
+      const isWin = row.result === 'WIN';
+      qualityResults[isWin ? 'win' : 'lose'].push(q.total);
+      
+      // 各ファクターの勝率を計算
+      for (const [factor, value] of Object.entries(q.score)) {
+        if (!factorWinRates[factor]) factorWinRates[factor] = { with: { win: 0, lose: 0 }, without: { win: 0, lose: 0 } };
+        if (value === 1) {
+          factorWinRates[factor].with[isWin ? 'win' : 'lose']++;
+        } else {
+          factorWinRates[factor].without[isWin ? 'win' : 'lose']++;
+        }
+      }
+    }
+    
+    // 平均品質スコア
+    const avgWinQuality = qualityResults.win.length > 0 ? (qualityResults.win.reduce((a, b) => a + b, 0) / qualityResults.win.length).toFixed(1) : 0;
+    const avgLoseQuality = qualityResults.lose.length > 0 ? (qualityResults.lose.reduce((a, b) => a + b, 0) / qualityResults.lose.length).toFixed(1) : 0;
+    
+    // 各ファクターの影響度を計算
+    const factorImpact = [];
+    for (const [factor, data] of Object.entries(factorWinRates)) {
+      const withTotal = data.with.win + data.with.lose;
+      const withoutTotal = data.without.win + data.without.lose;
+      if (withTotal >= 3 && withoutTotal >= 3) {
+        const withWinRate = Math.round(data.with.win * 100 / withTotal);
+        const withoutWinRate = Math.round(data.without.win * 100 / withoutTotal);
+        const impact = withWinRate - withoutWinRate;
+        factorImpact.push({ factor, withWinRate, withoutWinRate, impact, withTotal, withoutTotal });
+      }
+    }
+    factorImpact.sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact));
+    
+    isabelQuality = { avgWinQuality, avgLoseQuality, factorImpact, totalSamples: rows.length };
+    console.log('[ISABEL] Quality:', JSON.stringify({ avgWin: avgWinQuality, avgLose: avgLoseQuality, factors: factorImpact.length }));
+    return isabelQuality;
+  } catch (e) { console.error('[ISABEL] Quality error:', e.message); return null; }
+}
+
+function generateQualityText() {
+  if (!isabelQuality) return '';
+  const lines = [];
+  
+  lines.push('【Analysis Quality Insights】');
+  lines.push('Average quality score: WIN=' + isabelQuality.avgWinQuality + '/10, LOSE=' + isabelQuality.avgLoseQuality + '/10');
+  
+  // 影響度の高いファクターを表示
+  const positive = isabelQuality.factorImpact.filter(f => f.impact >= 15).slice(0, 3);
+  const negative = isabelQuality.factorImpact.filter(f => f.impact <= -15).slice(0, 3);
+  
+  if (positive.length > 0) {
+    lines.push('【Quality factors that INCREASE win rate】');
+    for (const f of positive) {
+      const label = f.factor.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+      lines.push('- ' + label + ': +' + f.impact + '% (' + f.withWinRate + '% vs ' + f.withoutWinRate + '%)');
+    }
+  }
+  
+  if (negative.length > 0) {
+    lines.push('【Quality factors that DECREASE win rate】');
+    for (const f of negative) {
+      const label = f.factor.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+      lines.push('- Missing ' + label + ': ' + f.impact + '% impact');
+    }
+  }
+  
+  lines.push('【Quality Checklist - Include in your analysis】');
+  lines.push('□ Technical indicator (RSI, SMA, MACD)');
+  lines.push('□ Specific numbers (price targets, %)');
+  lines.push('□ Timeframe (short/long term)');
+  lines.push('□ Risk awareness');
+  lines.push('□ Avoid hopeful words (should, might, hope)');
+  
   return lines.join('\n');
 }
 
@@ -1013,6 +1140,7 @@ async function main() {
     await startSession();
     await getIsabelStats();
     await getIsabelPatterns();
+    await getIsabelQuality();
 
     const isScalping = process.env.SCALPING_MODE === 'true';
     
@@ -1033,6 +1161,7 @@ ${generateStrengthText('mistral')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
 ${generatePatternText()}
+${generateQualityText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1065,6 +1194,7 @@ ${generateStrengthText('google')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
 ${generatePatternText()}
+${generateQualityText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1097,6 +1227,7 @@ ${generateStrengthText('groq')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
 ${generatePatternText()}
+${generateQualityText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1134,6 +1265,7 @@ ${generateStrengthText('deepseek')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
 ${generatePatternText()}
+${generateQualityText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1176,6 +1308,7 @@ ${generateStrengthText('together')}
 【銘柄選択の指針（自動更新）】
 ${generateSymbolText()}
 ${generatePatternText()}
+${generateQualityText()}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
