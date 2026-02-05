@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-const PROMPT_VERSION = "3.7";
+const PROMPT_VERSION = "3.8";
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -337,6 +337,102 @@ let tradeMode = null;
 
 
 // ISABELインサイト取得（参考情報としてLLMに提供）
+
+// === ISABEL: Real-time Feedback for LLMs ===
+let isabelRealtimeFeedback = null;
+
+async function getRealtimeFeedback(provider) {
+  try {
+    console.log('[ISABEL] Loading realtime feedback for', provider);
+    
+    // 直近5取引の結果を取得
+    const [recentTrades] = await bigquery.query({ query: `
+      SELECT symbol, side, result,
+        ROUND((exit_price - filled_avg_price) / filled_avg_price * 100, 2) as pnl_pct,
+        FORMAT_TIMESTAMP('%m/%d %H:%M', timestamp, 'Asia/Tokyo') as trade_time
+      FROM magi_core.trades 
+      WHERE llm_provider = '${provider}' AND result IS NOT NULL
+      ORDER BY timestamp DESC LIMIT 5
+    ` });
+    
+    // プロバイダーの直近勝率
+    const [stats] = await bigquery.query({ query: `
+      SELECT 
+        COUNTIF(result = 'WIN') as recent_wins,
+        COUNTIF(result = 'LOSE') as recent_loses,
+        ROUND(SUM(CASE WHEN result = 'WIN' THEN (exit_price - filled_avg_price) * qty ELSE 0 END), 2) as total_profit,
+        ROUND(SUM(CASE WHEN result = 'LOSE' THEN (exit_price - filled_avg_price) * qty ELSE 0 END), 2) as total_loss
+      FROM magi_core.trades 
+      WHERE llm_provider = '${provider}' AND result IS NOT NULL
+        AND timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+    ` });
+    
+    isabelRealtimeFeedback = {
+      provider,
+      recentTrades: recentTrades || [],
+      stats: stats && stats[0] ? stats[0] : null
+    };
+    
+    console.log('[ISABEL] Realtime feedback:', JSON.stringify({ 
+      trades: recentTrades?.length || 0,
+      hasStats: !!stats?.[0]
+    }));
+    
+    return isabelRealtimeFeedback;
+  } catch (e) {
+    console.error('[ISABEL] Realtime feedback error:', e.message);
+    return null;
+  }
+}
+
+function generateRealtimeFeedbackText(provider) {
+  if (!isabelRealtimeFeedback || isabelRealtimeFeedback.provider !== provider) return '';
+  
+  const { recentTrades, stats } = isabelRealtimeFeedback;
+  const lines = [];
+  
+  // 直近の取引結果
+  if (recentTrades && recentTrades.length > 0) {
+    lines.push('【Your Recent Trades】');
+    for (const t of recentTrades) {
+      const emoji = t.result === 'WIN' ? '✓' : '✗';
+      const sign = t.pnl_pct >= 0 ? '+' : '';
+      lines.push(`${emoji} ${t.symbol} ${t.side}: ${t.result} (${sign}${t.pnl_pct}%) - ${t.trade_time}`);
+    }
+    
+    // 直近勝敗
+    const wins = recentTrades.filter(t => t.result === 'WIN').length;
+    const loses = recentTrades.filter(t => t.result === 'LOSE').length;
+    lines.push(`Recent: ${wins}W ${loses}L`);
+  }
+  
+  // 7日間の統計
+  if (stats && (stats.recent_wins > 0 || stats.recent_loses > 0)) {
+    lines.push('【Last 7 Days Performance】');
+    const total = stats.recent_wins + stats.recent_loses;
+    const winRate = total > 0 ? Math.round(stats.recent_wins * 100 / total) : 0;
+    lines.push(`Win rate: ${winRate}% (${stats.recent_wins}W ${stats.recent_loses}L)`);
+    
+    const netPnL = (stats.total_profit || 0) + (stats.total_loss || 0);
+    const sign = netPnL >= 0 ? '+' : '';
+    lines.push(`Net P&L: ${sign}$${netPnL.toFixed(2)}`);
+  }
+  
+  // 学習ポイント
+  if (recentTrades && recentTrades.length >= 3) {
+    const recentLoses = recentTrades.filter(t => t.result === 'LOSE');
+    if (recentLoses.length >= 2) {
+      lines.push('【Caution】Recent losing streak detected. Review your analysis quality.');
+    }
+    const recentWins = recentTrades.filter(t => t.result === 'WIN');
+    if (recentWins.length >= 3) {
+      lines.push('【Momentum】Strong recent performance. Maintain your analysis approach.');
+    }
+  }
+  
+  return lines.join('\n');
+}
+
 async function getIsabelInsights() {
   try {
     const query = `
@@ -1141,6 +1237,7 @@ async function main() {
     await getIsabelStats();
     await getIsabelPatterns();
     await getIsabelQuality();
+    await getRealtimeFeedback(getLLMProvider());
 
     const isScalping = process.env.SCALPING_MODE === 'true';
     
@@ -1162,6 +1259,7 @@ ${generateStrengthText('mistral')}
 ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
+${generateRealtimeFeedbackText(getLLMProvider())}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1195,6 +1293,7 @@ ${generateStrengthText('google')}
 ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
+${generateRealtimeFeedbackText(getLLMProvider())}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1228,6 +1327,7 @@ ${generateStrengthText('groq')}
 ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
+${generateRealtimeFeedbackText(getLLMProvider())}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1266,6 +1366,7 @@ ${generateStrengthText('deepseek')}
 ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
+${generateRealtimeFeedbackText(getLLMProvider())}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
@@ -1309,6 +1410,7 @@ ${generateStrengthText('together')}
 ${generateSymbolText()}
 ${generatePatternText()}
 ${generateQualityText()}
+${generateRealtimeFeedbackText(getLLMProvider())}
 【分析の質について】
 長い分析=良い分析ではない。具体的指標(RSI,移動平均,出来高)を含む分析が高勝率。
 【重要: 取引判断の前にget_price_historyを必ず使うこと】
