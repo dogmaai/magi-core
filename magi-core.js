@@ -379,7 +379,6 @@ Volume: ${spike.volumeRatio}x average (${spike.strength})
 Direction: ${spike.direction} (${spike.priceChange}%)
 Signal: ${spike.suggestion}`;
 }
-}
 
 
 // === Momentum Detection (Trend Surfer) ===
