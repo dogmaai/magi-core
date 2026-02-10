@@ -736,6 +736,50 @@ const alpacaHeaders = {
   'Content-Type': 'application/json',
 };
 
+function calculateATR(bars, period) {
+  if (!bars || bars.length < period) {
+    return null;
+  }
+  let trValues = [];
+  for (let i = 1; i < bars.length; i++) {
+    const high = bars[i].h;
+    const low = bars[i].l;
+    const prevClose = bars[i-1].c;
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    trValues.push(tr);
+  }
+
+  if (trValues.length < period) {
+    return null;
+  }
+  
+  // Wilder's Smoothing
+  let atr = trValues.slice(0, period).reduce((sum, val) => sum + val, 0) / period;
+  for (let i = period; i < trValues.length; i++) {
+    atr = (atr * (period - 1) + trValues[i]) / period;
+  }
+  
+  return atr;
+}
+
+async function getTradeExecutionData(symbol) {
+  try {
+    const historyUrl = `https://data.alpaca.markets/v2/stocks/${symbol}/bars?timeframe=1Day&limit=21&feed=iex`;
+    const historyResponse = await fetch(historyUrl, { headers: alpacaHeaders });
+    if (!historyResponse.ok) return { atr: null };
+    
+    const historyData = await historyResponse.json();
+    const bars = historyData.bars || [];
+    
+    const atr14 = calculateATR(bars, 14);
+    
+    return { atr: atr14 };
+  } catch (e) {
+    console.error(`[EXEC_DATA] Failed to get ATR for ${symbol}: ${e.message}`);
+    return { atr: null };
+  }
+}
+
 const tools = [
   {
     type: "function",
@@ -895,6 +939,8 @@ async function executeTool(toolName, params) {
           date: b.t.split("T")[0],
           open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v
         }));
+        const atr14 = calculateATR(bars, 14);
+
         return {
           symbol: params.symbol,
           latest_close: latestClose,
@@ -902,6 +948,7 @@ async function executeTool(toolName, params) {
             sma5: sma5 ? sma5.toFixed(2) : null,
             sma20: sma20 ? sma20.toFixed(2) : null,
             rsi14: rsi14,
+            atr14: atr14 ? atr14.toFixed(4) : null, // Add ATR to indicators
             change_1d: change1d + "%",
             change_5d: change5d + "%",
             change_20d: change20d ? change20d + "%" : null,
@@ -925,6 +972,12 @@ async function executeTool(toolName, params) {
             qty: params.qty || "NULL"
           }));
           return { error: "Missing required parameters: symbol, side, qty" };
+        // === DIRECTION GUARD: Together is SELL-only ===
+        // Data: Together BUY 22.7% (5W 17L) vs SELL 90.9% (20W 2L)
+        if (getLLMProvider() === 'together' && params.side && params.side.toLowerCase() === 'buy') {
+          console.warn('[DIRECTION GUARD] Together BUY blocked.');
+          return { error: 'DIRECTION GUARD: Your BUY decisions have 22.7% win rate (5W 17L). Focus on SELL where you achieve 90.9% (20W 2L). Re-analyze for a SELL opportunity.', blocked_by: 'direction_guard' };
+        }
         }
         // === ISABEL: 思考パターン類似度判定 ===
         if (lastReasoning && isabelEmbeddings) {
@@ -992,6 +1045,8 @@ async function executeTool(toolName, params) {
           }
         }
         
+        const tradeExecutionData = await getTradeExecutionData(params.symbol);
+
         await safeInsert('trades', [{
           session_id: sessionId,
           timestamp: new Date().toISOString(),
@@ -999,14 +1054,15 @@ async function executeTool(toolName, params) {
           symbol: params.symbol,
           side: params.side,
           qty: params.qty,
-          price: filledPrice ? parseFloat(filledPrice) : null,
+          filled_avg_price: filledPrice ? parseFloat(filledPrice) : null,
+          atr_at_execution: tradeExecutionData.atr,
           reason: params.reason,
           llm_provider: getLLMProvider(),
           unit_name: getLLMProvider() === 'google' ? 'MELCHIOR-1' : getLLMProvider() === 'groq' ? 'ANIMA' : getLLMProvider() === 'deepseek' ? 'CASPER' : getLLMProvider() === 'together' ? 'ORACLE' : 'SOPHIA-5',
           trade_mode:tradeMode,
           prompt_version: PROMPT_VERSION
         }]);
-        return orderResult; 
+        return orderResult;
 
       case "log_analysis":
         lastReasoning = params.reasoning;  // ISABEL: 保存
