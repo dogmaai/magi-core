@@ -973,11 +973,17 @@ async function executeTool(toolName, params) {
           }));
           return { error: "Missing required parameters: symbol, side, qty" };
         }
-        // === DIRECTION GUARD: Together is SELL-only ===
-        // Data: Together BUY 22.7% (5W 17L) vs SELL 90.9% (20W 2L)
-        if (getLLMProvider() === 'together' && params.side && params.side.toLowerCase() === 'buy') {
-          console.warn('[DIRECTION GUARD] Together BUY blocked.');
-          return { error: 'DIRECTION GUARD: Your BUY decisions have 22.7% win rate (5W 17L). Focus on SELL where you achieve 90.9% (20W 2L). Re-analyze for a SELL opportunity.', blocked_by: 'direction_guard' };
+        // === DIRECTION GUARD: Data-driven auto-block ===
+        // Condition: win_rate <= 30% AND loses >= 3 (same as ISABEL WARNING threshold)
+        if (isabelStats && params.side) {
+          const dir = isabelStats.directions[getLLMProvider()];
+          if (dir) {
+            const sideStats = dir[params.side.toLowerCase()];
+            if (sideStats && sideStats.win_rate <= 30 && sideStats.loses >= 3) {
+              console.warn('[DIRECTION GUARD] ' + getLLMProvider() + ' ' + params.side.toUpperCase() + ' blocked. Win rate: ' + sideStats.win_rate + '% (' + sideStats.wins + 'W ' + sideStats.loses + 'L)');
+              return { error: 'DIRECTION GUARD: Your ' + params.side.toUpperCase() + ' decisions have ' + sideStats.win_rate + '% win rate (' + sideStats.wins + 'W ' + sideStats.loses + 'L). This direction is blocked. Re-analyze for the opposite direction.', blocked_by: 'direction_guard', win_rate: sideStats.win_rate, wins: sideStats.wins, loses: sideStats.loses };
+            }
+          }
         }
         // === ISABEL: 思考パターン類似度判定 ===
         if (lastReasoning && isabelEmbeddings) {
