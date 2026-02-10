@@ -972,12 +972,12 @@ async function executeTool(toolName, params) {
             qty: params.qty || "NULL"
           }));
           return { error: "Missing required parameters: symbol, side, qty" };
+        }
         // === DIRECTION GUARD: Together is SELL-only ===
         // Data: Together BUY 22.7% (5W 17L) vs SELL 90.9% (20W 2L)
         if (getLLMProvider() === 'together' && params.side && params.side.toLowerCase() === 'buy') {
           console.warn('[DIRECTION GUARD] Together BUY blocked.');
           return { error: 'DIRECTION GUARD: Your BUY decisions have 22.7% win rate (5W 17L). Focus on SELL where you achieve 90.9% (20W 2L). Re-analyze for a SELL opportunity.', blocked_by: 'direction_guard' };
-        }
         }
         // === ISABEL: 思考パターン類似度判定 ===
         if (lastReasoning && isabelEmbeddings) {
