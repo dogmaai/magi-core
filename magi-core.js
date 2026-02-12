@@ -1172,7 +1172,26 @@ const geminiTools = [
   }
 ];
 
+
+// === 429 Auto-Retry Wrapper ===
 async function callLLM(messages) {
+  const maxRetries = 3;
+  const retryDelaySec = 30;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await callLLMInternal(messages);
+    } catch (error) {
+      if (error.message && error.message.includes('429') && attempt < maxRetries) {
+        console.log('[RETRY] 429 Rate limit hit. Attempt ' + attempt + '/' + maxRetries + '. Waiting ' + retryDelaySec + 's...');
+        await new Promise(resolve => setTimeout(resolve, retryDelaySec * 1000));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function callLLMInternal(messages) {
   const startTime = Date.now();
   let response;
   let provider, model, inputTokens, outputTokens, costUsd;
@@ -1796,10 +1815,11 @@ Available tools: get_account, get_price, get_price_history, get_positions, log_a
       { role: "user", content: userPrompt }
     ];
 
-    const maxTurns = 15;
+    const maxTurns = 8;
 
     for (let turn = 1; turn <= maxTurns; turn++) {
       console.log("\n=== Turn " + turn + " ===");
+      if (turn > 1) { console.log("[WAIT] 15s interval between turns..."); await new Promise(r => setTimeout(r, 15000)); }
       const response = await callLLM(messages);
 
       if (!response.choices?.[0]?.message) {
