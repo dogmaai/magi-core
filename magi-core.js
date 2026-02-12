@@ -7,6 +7,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
+const QWEN_API_KEY = process.env.QWEN_API_KEY;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
 
@@ -1405,6 +1406,47 @@ async function callLLMInternal(messages) {
         cost_usd: costUsd,
       }]);
       return deepseekResponse;
+    } else if (getLLMProvider() === 'qwen') {
+      provider = 'qwen';
+      model = 'qwen-plus';
+      response = await fetch('https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + QWEN_API_KEY
+        },
+        body: JSON.stringify({
+          model,
+          messages: messages.map(m => {
+            if (m.role === 'tool') {
+              const { tool_name, ...rest } = m;
+              return rest;
+            }
+            return m;
+          }),
+          tools,
+          tool_choice: 'auto'
+        })
+      });
+        const errorData = await response.json();
+        console.error('[QWEN ERROR]', response.status, errorData);
+        throw new Error('Qwen API error: ' + response.status);
+      }
+      const qwenResponse = await response.json();
+      const responseTimeMs = Date.now() - startTime;
+      inputTokens = qwenResponse.usage?.prompt_tokens || 0;
+      outputTokens = qwenResponse.usage?.completion_tokens || 0;
+      costUsd = (inputTokens * 0.8 + outputTokens * 2.0) / 1000000;
+      await safeInsert('llm_metrics', [{
+        session_id: sessionId,
+        timestamp: new Date().toISOString(),
+        provider, model,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        response_time_ms: responseTimeMs,
+        cost_usd: costUsd,
+      }]);
+      return qwenResponse;
     } else if (getLLMProvider() === 'together') {
       provider = 'together';
       model = 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
