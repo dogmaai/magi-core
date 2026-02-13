@@ -220,15 +220,15 @@ function generatePatternText() {
   if (!isabelPatterns) return '';
   const lines = [];
   if (isabelPatterns.winPatterns.length > 0) {
-    lines.push('【Winning Patterns】');
+    lines.push('[WINNING_PATTERNS]');
     for (const [kw, s] of isabelPatterns.winPatterns) lines.push('- "' + kw + '" → ' + s.winRate + '% (' + s.wins + 'W/' + s.loses + 'L)');
   }
   if (isabelPatterns.losePatterns.length > 0) {
-    lines.push('【Losing Patterns - AVOID】');
+    lines.push('[LOSING_PATTERNS - AVOID THESE]');
     for (const [kw, s] of isabelPatterns.losePatterns) lines.push('- "' + kw + '" → ' + s.winRate + '% (' + s.wins + 'W/' + s.loses + 'L) DANGER');
   }
   if (isabelPatterns.shortAnalysisWinRate !== null && isabelPatterns.shortAnalysisWinRate < 40) {
-    lines.push('【WARNING】Short analysis (<50 chars) = ' + isabelPatterns.shortAnalysisWinRate + '% win rate');
+    lines.push('ALERT: Short reasoning (<50 chars) has only ' + isabelPatterns.shortAnalysisWinRate + '% win rate. Write detailed analysis.');
   }
   return lines.join('\n');
 }
@@ -565,9 +565,9 @@ function generateRealtimeFeedbackText(provider) {
   
   // 直近の取引結果
   if (recentTrades && recentTrades.length > 0) {
-    lines.push('【Your Recent Trades】');
+    lines.push('[RECENT_TRADES]');
     for (const t of recentTrades) {
-      const emoji = t.result === 'WIN' ? '✓' : '✗';
+      const emoji = t.result === 'WIN' ? 'W' : 'L';
       const sign = t.pnl_pct >= 0 ? '+' : '';
       lines.push(`${emoji} ${t.symbol} ${t.side}: ${t.result} (${sign}${t.pnl_pct}%) - ${t.trade_time}`);
     }
@@ -580,7 +580,7 @@ function generateRealtimeFeedbackText(provider) {
   
   // 7日間の統計
   if (stats && (stats.recent_wins > 0 || stats.recent_loses > 0)) {
-    lines.push('【Last 7 Days Performance】');
+    lines.push('[7DAY_PERFORMANCE]');
     const total = stats.recent_wins + stats.recent_loses;
     const winRate = total > 0 ? Math.round(stats.recent_wins * 100 / total) : 0;
     lines.push(`Win rate: ${winRate}% (${stats.recent_wins}W ${stats.recent_loses}L)`);
@@ -594,11 +594,11 @@ function generateRealtimeFeedbackText(provider) {
   if (recentTrades && recentTrades.length >= 3) {
     const recentLoses = recentTrades.filter(t => t.result === 'LOSE');
     if (recentLoses.length >= 2) {
-      lines.push('【Caution】Recent losing streak detected. Review your analysis quality.');
+      lines.push('ALERT: Consecutive losses detected. Increase analysis depth before next trade.');
     }
     const recentWins = recentTrades.filter(t => t.result === 'WIN');
     if (recentWins.length >= 3) {
-      lines.push('【Momentum】Strong recent performance. Maintain your analysis approach.');
+      lines.push('STATUS: Strong recent performance. Continue current analysis approach.');
     }
   }
   
@@ -749,17 +749,15 @@ async function getIsabelInsights() {
     const s = rows[0];
     const winRate = Math.round(s.wins * 100 / s.total);
     
-    let insight = `【ISABELからの参考情報】
-過去${s.total}件の取引分析から観察されたパターン：
-・勝率: ${winRate}%（${s.wins}勝${s.losses}敗）
-・WIN時の平均confidence: ${s.win_avg_conf}
-・LOSE時の平均confidence: ${s.lose_avg_conf}`;
+    let insight = `[ISABEL SYSTEM ANALYSIS - ${s.total} trades evaluated]
+WIN_RATE: ${winRate}% (${s.wins}W / ${s.losses}L)
+AVG_CONFIDENCE: WIN=${s.win_avg_conf} | LOSE=${s.lose_avg_conf}`;
     
     if (s.lose_avg_conf > s.win_avg_conf) {
-      insight += `\n→ 過度に高いconfidenceは過信の可能性あり`;
+      insight += `\nALERT: High confidence correlates with LOSING trades. Lower confidence may produce better results.`;
     }
-    insight += `\n・WIN時の平均リターン: +${s.win_avg_return}%`;
-    insight += `\n\nこれは参考情報です。あなたの自由な判断を制限するものではありません。`;
+    insight += `\nAVG_RETURN_ON_WIN: +${s.win_avg_return}%`;
+    insight += `\nNOTE: This is historical data. Use it to inform, not override, your analysis.`;
     
     return insight;
   } catch (e) {
