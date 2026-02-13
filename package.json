@@ -5,6 +5,7 @@
   "dependencies": {
     "@google-cloud/bigquery": "^7.3.0",
     "cohere-ai": "^7.20.0",
+    "google-auth-library": "^10.5.0",
     "node-fetch": "^3.3.2",
     "uuid": "^9.0.0"
   }
