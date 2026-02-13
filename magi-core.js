@@ -1731,6 +1731,11 @@ Available tools: get_account, get_price, get_price_history, get_positions, log_a
         prompt: swingConstitution
       },
       
+      'xai': {
+        name: 'BALTHASAR',
+        prompt: swingConstitution
+      },
+
       'together': {
         name: 'ORACLE',
         prompt: swingConstitution
