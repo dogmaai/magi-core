@@ -47,10 +47,8 @@ function getLLMProvider() { return (process.env.LLM_PROVIDER || 'mistral').trim(
 const BUDGET_WEIGHTS = {
   'mistral_NORMAL': 1,     // SOPHIA-5
   'google_NORMAL': 1,      // MELCHIOR-1
-  'groq_NORMAL': 1,        // ANIMA (通常)
-  'groq_SCALPING': 1,
+  'groq_NORMAL': 1,        // ANIMA
   'deepseek_NORMAL': 1,      // CASPER
-  'together_SCALPING': 1,    // ORACLE
   'xai_NORMAL': 1            // BALTHASAR (Grok)
   // 例: 'openai_NORMAL': 1  ← 追加すると自動で5等分(20%)になる
 };
@@ -68,6 +66,72 @@ const analyticsDataset = bigquery.dataset('magi_analytics');
 let sessionId = null;
 let lastReasoning = null;  // ISABEL: 直前のreasoning保持
 let startingEquity = null;
+
+// === VIX REGIME DETECTION ===
+// Uses VIXY (VIX Short-Term Futures ETF) as VIX proxy
+// VIXY price ≈ VIX level (close correlation)
+let currentVixRegime = null;
+
+async function getVixRegime() {
+  try {
+    const response = await fetch(
+      "https://data.alpaca.markets/v2/stocks/VIXY/bars?timeframe=1Day&limit=1&feed=iex",
+      { headers: { "APCA-API-KEY-ID": ALPACA_API_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY } }
+    );
+    if (!response.ok) throw new Error("VIXY fetch failed: " + response.status);
+    const data = await response.json();
+    const bars = data.bars || [];
+    if (bars.length === 0) {
+      console.log("[VIX] No VIXY data available, defaulting to NORMAL regime");
+      return { level: "NORMAL", vixEstimate: null, vixyPrice: null, buyAllowed: true, sellAllowed: true, description: "No VIX data" };
+    }
+
+    const vixyPrice = bars[bars.length - 1].c;
+    const vixyHigh = bars[bars.length - 1].h;
+    const vixyLow = bars[bars.length - 1].l;
+    const intraRange = vixyHigh - vixyLow;
+    
+    // VIXY price -> VIX regime mapping
+    // VIXY tracks VIX short-term futures, price roughly equals VIX level
+    let level, buyAllowed, sellAllowed, description;
+    
+    if (vixyPrice < 18) {
+      level = "LOW_FEAR";
+      buyAllowed = true;
+      sellAllowed = true;  // allowed but not recommended
+      description = "Market calm (VIX~" + Math.round(vixyPrice) + "). LONG positions favored. Bull market conditions.";
+    } else if (vixyPrice < 25) {
+      level = "NORMAL";
+      buyAllowed = true;
+      sellAllowed = true;
+      description = "Normal volatility (VIX~" + Math.round(vixyPrice) + "). Trade both directions selectively.";
+    } else if (vixyPrice < 35) {
+      level = "HIGH_FEAR";
+      buyAllowed = true;  // allowed but with warning
+      sellAllowed = true;
+      description = "Elevated fear (VIX~" + Math.round(vixyPrice) + "). SHORT positions favored. Be cautious with LONG.";
+    } else if (vixyPrice < 50) {
+      level = "EXTREME_FEAR";
+      buyAllowed = false;  // BLOCKED
+      sellAllowed = true;
+      description = "EXTREME FEAR (VIX~" + Math.round(vixyPrice) + "). BUY BLOCKED. Only SHORT or CASH.";
+    } else {
+      level = "PANIC";
+      buyAllowed = false;  // BLOCKED
+      sellAllowed = true;
+      description = "MARKET PANIC (VIX~" + Math.round(vixyPrice) + "). BUY BLOCKED. Maximum SHORT exposure or stay CASH.";
+    }
+
+    const regime = { level, vixEstimate: Math.round(vixyPrice), vixyPrice, intraRange: Math.round(intraRange * 100) / 100, buyAllowed, sellAllowed, description };
+    console.log("[VIX] Regime detected:", JSON.stringify(regime));
+    currentVixRegime = regime;
+    return regime;
+  } catch (e) {
+    console.error("[VIX] Error fetching regime:", e.message);
+    return { level: "NORMAL", vixEstimate: null, vixyPrice: null, buyAllowed: true, sellAllowed: true, description: "VIX data unavailable, proceed with caution" };
+  }
+}
+
 // === ISABEL: Dynamic Stats from BigQuery ===
 let isabelStats = null;
 
@@ -988,6 +1052,17 @@ async function executeTool(toolName, params) {
             }
           }
         }
+        // === VIX REGIME GUARD ===
+        // Block BUY in EXTREME_FEAR/PANIC, warn in HIGH_FEAR
+        if (currentVixRegime && params.side && params.side.toLowerCase() === 'buy') {
+          if (currentVixRegime.level === 'EXTREME_FEAR' || currentVixRegime.level === 'PANIC') {
+            console.warn('[VIX GUARD] BUY blocked in ' + currentVixRegime.level + ' regime (VIX~' + currentVixRegime.vixEstimate + ')');
+            return { error: 'VIX GUARD: Market is in ' + currentVixRegime.level + ' mode (VIX~' + currentVixRegime.vixEstimate + '). BUY orders are blocked. Re-analyze for a SELL/SHORT opportunity or stay in CASH.', blocked_by: 'vix_guard', vix_level: currentVixRegime.level, vix_estimate: currentVixRegime.vixEstimate };
+          }
+          if (currentVixRegime.level === 'HIGH_FEAR') {
+            console.warn('[VIX GUARD] BUY warning in HIGH_FEAR regime (VIX~' + currentVixRegime.vixEstimate + '). Allowed but risky.');
+          }
+        }
         // === ISABEL: 思考パターン類似度判定 ===
         if (lastReasoning && isabelEmbeddings) {
           const prediction = await predictWinProbability(lastReasoning);
@@ -1590,7 +1665,6 @@ async function callLLMInternal(messages) {
 
 async function startSession() {
   sessionId = uuidv4();
-  tradeMode = process.env.SCALPING_MODE === 'true' ? 'SCALPING' : 'NORMAL';
   const account = await executeTool("get_account", {});
   await safeInsert('sessions', [{
     session_id: sessionId,
@@ -1599,7 +1673,7 @@ async function startSession() {
     llm_model: getLLMProvider() === 'google' ? 'gemini-2.0-flash' : getLLMProvider() === 'groq' ? 'llama-3.3-70b-versatile' : getLLMProvider() === 'deepseek' ? 'deepseek-chat' : getLLMProvider() === 'together' ? 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8' : getLLMProvider() === 'xai' ? 'grok-4-1-fast' : 'mistral-small-latest',
     starting_equity: parseFloat(account.equity),
     total_trades: 0,
-    trade_mode: tradeMode
+    trade_mode: 'NORMAL'
   }]);
   startingEquity = parseFloat(account.equity);
   console.log("[SESSION] Started: " + sessionId);
@@ -1650,8 +1724,6 @@ async function main() {
     await getRealtimeFeedback(getLLMProvider());
     await getIsabelEmbeddings();
 
-    const isScalping = process.env.SCALPING_MODE === 'true';
-    
     // ユニット別の自律的プロンプト
     // === MAGI CONSTITUTION v2.0 - Swing Trading North Star ===
     const isabelFeedback = ""; // TODO: fetch from ISABEL pipeline
@@ -1703,10 +1775,6 @@ NOTE: Concise, focused analysis wins more than verbose reasoning. Aim for clarit
 
 [ISABEL REFERENCE - Advisory Only]
 ` + (isabelFeedback || "No pattern data available yet.") + `
-Available tools: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`;
-
-[ISABEL REFERENCE - Advisory Only]
-` + (isabelFeedback || "No pattern data available yet.") + `
 
 Available tools: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`;
 
@@ -1742,60 +1810,20 @@ Available tools: get_account, get_price, get_price_history, get_positions, log_a
       }
     };
 
-    const scalpingPrompt = `You are an autonomous scalping trader "ORACLE".
-
-**IMPORTANT: You MUST respond and write ALL outputs in English only. Do not use any other language.**
-
-【MISSION】
-Accumulate small profits quickly through short-term trades. Always record your reasoning in detail.
-
-【YOUR PERSONALITY】
-You are a contrarian investor. Don't fear going against the crowd.
-Find opportunities to exploit crowd psychology even in short-term movements.
-
-【TRADING RULES】
-- Maximum $50 per trade
-- Quickly scan multiple symbols for momentum
-- Target symbols (priority order): META, AAPL, MSFT, AMD, TSLA, AMZN, CRM, ADBE, IONQ, RGTI, QBTS, JPM, BAC, GS, V, MA, UNH, JNJ, PFE, ABBV, LLY, WMT, COST, HD, MCD, SBUX, XOM, CVX, COP, SPY, QQQ, IWM, NVDA
-- NOTE: GOOGL previously avoided, now enabled for testing
-
-【CRITICAL: THOUGHT LOGGING RULES】
-Before every trade, you MUST call log_analysis with:
-- reasoning: WHY you chose this symbol (price movement, volume, market sentiment - minimum 50 characters, IN ENGLISH)
-- hypothesis: What you predict will happen (specific price target or timeframe, IN ENGLISH)
-- confidence: Your confidence level (0.0-1.0)
-- concerns: Risks or concerns (IN ENGLISH)
-
-Your decision process will be analyzed later to discover winning algorithms.
-Brief logs like "going up" are USELESS for analysis.
-
-【IMPORTANT: Always use get_price_history before trading】
-Use get_price_history to check 20-day price trend, SMA5/SMA20, RSI14, and volume.
-Never trade on gut feeling alone. Use data to decide.
-
-【FLOW】
-1. get_account → Check balance (once)
-2. get_price → Scan candidate symbols one at a time
-3. get_price_history → Check trend and indicators for top candidates (REQUIRED)
-4. Select the symbol with the best data-backed momentum
-5. log_analysis → Record detailed reasoning referencing actual indicators (REQUIRED)
-6. place_order → Execute trade
-
-Available tools: get_account, get_price, get_price_history, get_positions, log_analysis, place_order`;
-
-    const provider = getLLMProvider();
     
-    // プロンプト選択
-    let systemPrompt;
-    if (isScalping) {
-      systemPrompt = scalpingPrompt;
-    } else if (unitPersonalities[provider]) {
-      systemPrompt = unitPersonalities[provider].prompt;
-    } else {
-      // フォールバック
-      systemPrompt = unitPersonalities['mistral'].prompt;
+
+    // === VIXレジーム取得 ===
+    const vixRegime = await getVixRegime();
+    if (vixRegime) {
+      const vixInfo = "\n\n【CURRENT MARKET REGIME - VIX】\n" +
+        "VIX Level: ~" + (vixRegime.vixEstimate || "Unknown") + " (" + vixRegime.level + ")\n" +
+        vixRegime.description + "\n" +
+        (vixRegime.level === "HIGH_FEAR" ? "⚠ WARNING: BUY positions carry elevated risk in this environment.\n" : "") +
+        (vixRegime.level === "EXTREME_FEAR" || vixRegime.level === "PANIC" ? "🚫 BUY ORDERS WILL BE BLOCKED BY SYSTEM. Focus on SELL/SHORT only.\n" : "") +
+        (vixRegime.level === "LOW_FEAR" ? "✅ Favorable conditions for LONG positions.\n" : "");
+      systemPrompt += vixInfo;
+      console.log("[VIX] Regime info added to prompt: " + vixRegime.level);
     }
-    
 
     // ISABELインサイトをプロンプトに追加（全モード）
     if (true) {
@@ -1806,11 +1834,9 @@ Available tools: get_account, get_price, get_price_history, get_positions, log_a
       }
     }
 
-    const userPrompt = isScalping 
-      ? "スキャルピング開始。素早く判断して取引せよ。"
-      : "取引を開始してください。まずget_accountで残高を確認し、自由に判断して取引してください。";
+    const userPrompt = "取引を開始してください。まずget_accountで残高を確認し、自由に判断して取引してください。";
     
-    console.log("[MODE] " + (isScalping ? "SCALPING" : "NORMAL"));
+    console.log("[MODE] NORMAL");
 
     let messages = [
       { role: "system", content: systemPrompt },
